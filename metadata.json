@@ -1,0 +1,6 @@
+{
+  "name": "@@RAFU FOLK@@ Comic Studio",
+  "description": "Zero-script AI Bengali stick cartoon generator and Facebook Page auto-poster with programmatic Canvas illustration and @@RAFU FOLK@@ branding.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
