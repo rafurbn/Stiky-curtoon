@@ -31,6 +31,135 @@ function getGeminiClient() {
   });
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function extractGeminiErrorInfo(err: unknown): {
+  code?: number;
+  status?: string;
+  message: string;
+} {
+  const rawMessage = err instanceof Error ? err.message : String(err || 'Unknown error');
+  const errObj = err as { status?: number; code?: number };
+  let code = typeof errObj?.status === 'number' ? errObj.status : typeof errObj?.code === 'number' ? errObj.code : undefined;
+  let statusText: string | undefined;
+  let cleanMessage = rawMessage;
+
+  try {
+    const jsonStart = rawMessage.indexOf('{');
+    if (jsonStart !== -1) {
+      const parsed = JSON.parse(rawMessage.slice(jsonStart));
+      const inner = parsed?.error ?? parsed;
+      if (typeof inner?.code === 'number') code = inner.code;
+      if (typeof inner?.status === 'string') statusText = inner.status;
+      if (typeof inner?.message === 'string') cleanMessage = inner.message;
+    }
+  } catch {
+    // Keep original message if not JSON
+  }
+
+  return { code, status: statusText, message: cleanMessage };
+}
+
+function shouldRetryOrFallback(err: unknown): boolean {
+  const info = extractGeminiErrorInfo(err);
+  const msg = info.message.toLowerCase();
+  return (
+    info.code === 503 ||
+    info.code === 429 ||
+    info.code === 500 ||
+    info.code === 404 ||
+    info.status === 'UNAVAILABLE' ||
+    info.status === 'RESOURCE_EXHAUSTED' ||
+    info.status === 'NOT_FOUND' ||
+    msg.includes('high demand') ||
+    msg.includes('unavailable') ||
+    msg.includes('overloaded') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('not_found') ||
+    msg.includes('fetch failed')
+  );
+}
+
+function formatFriendlyGeminiError(err: unknown): { httpStatus: number; message: string } {
+  const info = extractGeminiErrorInfo(err);
+  const msg = info.message.toLowerCase();
+
+  if (info.code === 503 || info.status === 'UNAVAILABLE' || msg.includes('high demand')) {
+    return {
+      httpStatus: 503,
+      message: 'AI সার্ভারে এই মুহূর্তে অতিরিক্ত চাপ রয়েছে (503)। অনুগ্রহ করে ১০–১৫ সেকেন্ড পর আবার চেষ্টা করুন।',
+    };
+  }
+  if (info.code === 429 || info.status === 'RESOURCE_EXHAUSTED' || msg.includes('quota')) {
+    return {
+      httpStatus: 429,
+      message: 'Gemini API রেট লিমিট বা ফ্রি কোটা সাময়িকভাবে পূর্ণ হয়েছে (429)। কিছুক্ষণ পর আবার চেষ্টা করুন।',
+    };
+  }
+  if (info.code === 401 || info.code === 403 || msg.includes('api_key') || msg.includes('permission_denied')) {
+    return {
+      httpStatus: 403,
+      message: 'GEMINI_API_KEY সঠিক নয় বা অনুমোদন পায়নি। সার্ভারের Environment Variable যাচাই করুন।',
+    };
+  }
+  if (info.code === 404 || info.status === 'NOT_FOUND') {
+    return {
+      httpStatus: 404,
+      message: 'নির্বাচিত AI মডেলটি পাওয়া যায়নি (404)। অনুগ্রহ করে পরে আবার চেষ্টা করুন।',
+    };
+  }
+
+  return {
+    httpStatus: 500,
+    message: info.message || 'AI জেনারেশনে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।',
+  };
+}
+
+async function generateJsonWithRetryAndFallback(params: {
+  ai: GoogleGenAI;
+  contents: string;
+  systemInstruction: string;
+  responseSchema: Record<string, unknown>;
+}) {
+  const attempts: Array<{ model: string; useThinkingLow: boolean; delayBeforeMs: number }> = [
+    { model: 'gemini-4-hydrogen', useThinkingLow: true, delayBeforeMs: 0 },
+    { model: 'gemini-4-hydrogen', useThinkingLow: true, delayBeforeMs: 900 },
+    { model: 'gemini-3.1-flash-lite', useThinkingLow: false, delayBeforeMs: 1200 },
+  ];
+
+  let lastErr: unknown;
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
+    if (attempt.delayBeforeMs > 0) {
+      await sleep(attempt.delayBeforeMs);
+    }
+    try {
+      const response = await params.ai.models.generateContent({
+        model: attempt.model,
+        contents: params.contents,
+        config: {
+          ...(attempt.useThinkingLow
+            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+            : {}),
+          systemInstruction: params.systemInstruction,
+          responseMimeType: 'application/json',
+          responseSchema: params.responseSchema,
+        },
+      });
+      return response;
+    } catch (err) {
+      lastErr = err;
+      console.warn(`Gemini attempt ${i + 1} (${attempt.model}) failed:`, extractGeminiErrorInfo(err).message);
+      if (!shouldRetryOrFallback(err)) {
+        throw err;
+      }
+    }
+  }
+  throw lastErr;
+}
+
 const VALID_LAYOUTS = ['1-panel', '2-panel', '3-panel', '4-panel'];
 const VALID_THEMES = [
   'cream_sketch',
@@ -116,15 +245,12 @@ Rules for great stick comics:
 5. Write an engaging, natural-sounding Facebook Page post caption ("fbCaption") in 1-2 short conversational lines with a playful question for comments and 1-2 natural hashtags (never spammy).
 6. Return exact panel count: ${panelCount} panels (panelIndex 0 to ${panelCount - 1}).`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
+    const response = await generateJsonWithRetryAndFallback({
+      ai,
       contents: prompt,
-      config: {
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        systemInstruction:
-          'You are a top Bengali humorist and stick-figure comic writer for "@@RAFU FOLK@@". Always output strictly valid JSON matching the schema.',
-        responseMimeType: 'application/json',
-        responseSchema: {
+      systemInstruction:
+        'You are a top Bengali humorist and stick-figure comic writer for "@@RAFU FOLK@@". Always output strictly valid JSON matching the schema.',
+      responseSchema: {
           type: Type.OBJECT,
           properties: {
             title: {
@@ -225,12 +351,11 @@ Rules for great stick comics:
           },
           required: ['title', 'fbCaption', 'panels'],
         },
-      },
     });
 
     const rawText = response.text?.trim();
     if (!rawText) {
-      return res.status(502).json({ error: 'Empty response from Gemini API.' });
+      return res.status(502).json({ error: 'AI থেকে খালি উত্তর এসেছে। আবার চেষ্টা করুন।' });
     }
 
     const parsed = JSON.parse(rawText);
@@ -248,9 +373,9 @@ Rules for great stick comics:
 
     return res.json(comicScript);
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to generate comic script.';
+    const friendly = formatFriendlyGeminiError(err);
     console.error('Generate comic error:', err);
-    return res.status(500).json({ error: message });
+    return res.status(friendly.httpStatus).json({ error: friendly.message });
   }
 });
 
@@ -321,15 +446,12 @@ Rules:
 3. Choose matching sound effect ("sfx") for each scene: "thunder", "laugh", "gasp", "pour", "punchline", "pop", "sad_trombone".
 4. Write a short catchy Bengali title (max 34 chars) and a natural 1-2 line Bengali Facebook Reels caption ("fbCaption") with 1 comment question and 2 hashtags.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
+    const response = await generateJsonWithRetryAndFallback({
+      ai,
       contents: prompt,
-      config: {
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        systemInstruction:
-          'You are a viral Bengali short-form stickman animation director. Output strictly valid JSON matching the schema.',
-        responseMimeType: 'application/json',
-        responseSchema: {
+      systemInstruction:
+        'You are a viral Bengali short-form stickman animation director. Output strictly valid JSON matching the schema.',
+      responseSchema: {
           type: Type.OBJECT,
           properties: {
             title: { type: Type.STRING },
@@ -424,12 +546,11 @@ Rules:
           },
           required: ['title', 'fbCaption', 'scenes'],
         },
-      },
     });
 
     const rawText = response.text?.trim();
     if (!rawText) {
-      return res.status(502).json({ error: 'Empty response from Gemini API.' });
+      return res.status(502).json({ error: 'AI থেকে খালি উত্তর এসেছে। আবার চেষ্টা করুন।' });
     }
 
     const parsed = JSON.parse(rawText);
@@ -498,9 +619,9 @@ Rules:
 
     return res.json(videoScript);
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to generate stickman video.';
+    const friendly = formatFriendlyGeminiError(err);
     console.error('Generate video error:', err);
-    return res.status(500).json({ error: message });
+    return res.status(friendly.httpStatus).json({ error: friendly.message });
   }
 });
 
