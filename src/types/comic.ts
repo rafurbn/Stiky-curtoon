@@ -129,3 +129,99 @@ export interface PublishLogEntry {
   error?: string;
   timestamp: string;
 }
+
+export type VideoTheme =
+  | 'rain_storm'
+  | 'desert_sun'
+  | 'office_drama'
+  | 'tea_stall'
+  | 'street_night';
+
+export type VideoAspectRatio = '9:16' | '1:1';
+
+export type VideoCamera =
+  | 'wide'
+  | 'zoom_left'
+  | 'zoom_right'
+  | 'zoom_center'
+  | 'shake';
+
+export type VideoAction =
+  | 'idle'
+  | 'walk_in'
+  | 'laugh'
+  | 'point_laugh'
+  | 'panting'
+  | 'shocked_jump'
+  | 'eye_pop'
+  | 'facepalm'
+  | 'hands_up'
+  | 'pour_water'
+  | 'sip_tea'
+  | 'run';
+
+export type VideoProp =
+  | 'none'
+  | 'umbrella_normal'
+  | 'umbrella_upside_down'
+  | 'broken_umbrella'
+  | 'water_tap_glass'
+  | 'tea_cup'
+  | 'smartphone'
+  | 'money'
+  | 'laptop'
+  | 'clock';
+
+export type VideoSfx =
+  | 'none'
+  | 'laugh'
+  | 'gasp'
+  | 'thunder'
+  | 'pour'
+  | 'punchline'
+  | 'pop'
+  | 'sad_trombone';
+
+export type VideoMusicStyle = 'comedy' | 'quirky' | 'dramatic' | 'none';
+
+export interface VideoCharacterState {
+  id: CharacterId;
+  name: string;
+  side: 'left' | 'right' | 'center';
+  expression: ExpressionType | 'exhausted';
+  action: VideoAction;
+  prop: VideoProp;
+  speech?: string;
+}
+
+export interface VideoScene {
+  sceneIndex: number;
+  durationSec: number;
+  theme: VideoTheme;
+  camera: VideoCamera;
+  sfx: VideoSfx;
+  captionTop?: string;
+  characters: VideoCharacterState[];
+}
+
+export interface VideoScript {
+  id: string;
+  title: string;
+  category: string;
+  aspectRatio: VideoAspectRatio;
+  musicStyle: VideoMusicStyle;
+  totalDurationSec: number;
+  scenes: VideoScene[];
+  fbCaption: string;
+  createdAt: string;
+  seed: number;
+}
+
+export interface VideoItem extends VideoScript {
+  status: PostStatus;
+  scheduledFor?: string;
+  publishedAt?: string;
+  fbPostId?: string;
+  errorMessage?: string;
+}
+

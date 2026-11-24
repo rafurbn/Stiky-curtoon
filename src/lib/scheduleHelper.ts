@@ -3,11 +3,18 @@ const BD_OFFSET_MS = 6 * 60 * 60 * 1000;
 
 export const DEFAULT_BD_SLOTS = ['08:30', '15:00', '19:50'];
 
+export function getBdDateKey(date: Date | string = new Date()): string {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  const bdMs = d.getTime() + BD_OFFSET_MS;
+  return new Date(bdMs).toISOString().slice(0, 10);
+}
+
 export function computeUpcomingBdSlots(
   slots: string[],
   totalCount: number,
   jitterMinutes = 0,
-  fromDate = new Date()
+  fromDate = new Date(),
+  minBufferMinutes = 15
 ): Date[] {
   const cleanSlots = (slots.length > 0 ? slots : DEFAULT_BD_SLOTS)
     .map((s) => {
@@ -19,8 +26,8 @@ export function computeUpcomingBdSlots(
     })
     .sort((a, b) => a.h * 60 + a.m - (b.h * 60 + b.m));
 
-  // Minimum 15 minutes ahead so Meta Graph API scheduled_publish_time (>= 10 min) always succeeds
-  const minAllowedUtcMs = fromDate.getTime() + 15 * 60 * 1000;
+  // Minimum 15 minutes ahead for Meta Graph API scheduled_publish_time (>= 10 min), or 0 for live Auto-Pilot
+  const minAllowedUtcMs = fromDate.getTime() + minBufferMinutes * 60 * 1000;
   const bdNow = new Date(fromDate.getTime() + BD_OFFSET_MS);
 
   const startYear = bdNow.getUTCFullYear();

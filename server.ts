@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
@@ -9,6 +10,11 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json({ limit: '15mb' }));
+
+const uploadVideo = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 45 * 1024 * 1024 },
+});
 
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -248,6 +254,256 @@ Rules for great stick comics:
   }
 });
 
+const VALID_VIDEO_THEMES = [
+  'rain_storm',
+  'desert_sun',
+  'office_drama',
+  'tea_stall',
+  'street_night',
+] as const;
+
+app.post('/api/generate-video', async (req, res) => {
+  try {
+    const {
+      category = 'auto',
+      theme = 'auto',
+      aspectRatio = '9:16',
+      dialogueMode = 'bangla',
+      musicStyle = 'comedy',
+      targetDurationSec = 10,
+      customHint = '',
+      recentTitles = [],
+    } = req.body ?? {};
+
+    const chosenCategory =
+      category === 'auto'
+        ? CATEGORY_POOL[Math.floor(Math.random() * CATEGORY_POOL.length)]
+        : String(category);
+
+    const safeTargetSec = Math.max(5, Math.min(15, Number(targetDurationSec) || 10));
+    const safeAspect = aspectRatio === '1:1' ? '1:1' : '9:16';
+    const safeMusic = ['comedy', 'quirky', 'dramatic', 'none'].includes(musicStyle)
+      ? musicStyle
+      : 'comedy';
+
+    const themeInstruction =
+      theme !== 'auto' && VALID_VIDEO_THEMES.includes(theme)
+        ? `Start or center the visual scenes around the "${theme}" background theme (you may shift to a contrasting theme for a karma/twist punchline if funnier).`
+        : 'Pick vivid contrasting themes across scenes (e.g., "rain_storm" -> "desert_sun", or "office_drama" -> "tea_stall", or "tea_stall" -> "street_night") so the story has visual variety.';
+
+    const dialogueInstruction =
+      dialogueMode === 'silent'
+        ? 'SILENT VISUAL SLAPSTICK MODE: Leave every character "speech" field as an empty string ""! Convey the entire joke purely through expressive poses, facial expressions, props, camera zooms, and sound effects.'
+        : 'Include ultra-short, punchy natural Bangladeshi Bengali speech bubbles (maximum 32 characters per bubble) only on key lines so viewers read instantly in 1 second.';
+
+    const avoidList =
+      Array.isArray(recentTitles) && recentTitles.length > 0
+        ? `Do NOT repeat these recent titles: ${recentTitles.slice(0, 10).join(' | ')}.`
+        : '';
+
+    const hintInstruction =
+      typeof customHint === 'string' && customHint.trim()
+        ? `User optional story hint: "${customHint.trim()}".`
+        : 'Invent a completely fresh, viral, relatable 3-beat funny slapstick or karma twist story.';
+
+    const ai = getGeminiClient();
+
+    const prompt = `Create a hilarious 3-scene animated stick-figure short video storyboard (total length ~${safeTargetSec} seconds, strictly between 5 and 15 seconds) for "@@RAFU FOLK@@".
+Category: ${chosenCategory}.
+${themeInstruction}
+${dialogueInstruction}
+${hintInstruction}
+${avoidList}
+
+Rules:
+1. Create exactly 3 scenes (sceneIndex 0, 1, 2). Sum of durationSec must be between 7 and ${safeTargetSec + 2} seconds (each scene 2.5 to 5 seconds).
+2. Make Scene 0 the funny setup, Scene 1 the escalation/twist, and Scene 2 the hilarious punchline with dramatic camera zoom ("zoom_left", "zoom_right", "zoom_center", or "shake") and "eye_pop" / "point_laugh" / "shocked_jump" / "pour_water" / "run" action!
+3. Choose matching sound effect ("sfx") for each scene: "thunder", "laugh", "gasp", "pour", "punchline", "pop", "sad_trombone".
+4. Write a short catchy Bengali title (max 34 chars) and a natural 1-2 line Bengali Facebook Reels caption ("fbCaption") with 1 comment question and 2 hashtags.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      contents: prompt,
+      config: {
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        systemInstruction:
+          'You are a viral Bengali short-form stickman animation director. Output strictly valid JSON matching the schema.',
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
+            fbCaption: { type: Type.STRING },
+            scenes: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  sceneIndex: { type: Type.INTEGER },
+                  durationSec: { type: Type.NUMBER },
+                  theme: {
+                    type: Type.STRING,
+                    enum: ['rain_storm', 'desert_sun', 'office_drama', 'tea_stall', 'street_night'],
+                  },
+                  camera: {
+                    type: Type.STRING,
+                    enum: ['wide', 'zoom_left', 'zoom_right', 'zoom_center', 'shake'],
+                  },
+                  sfx: {
+                    type: Type.STRING,
+                    enum: ['none', 'laugh', 'gasp', 'thunder', 'pour', 'punchline', 'pop', 'sad_trombone'],
+                  },
+                  captionTop: { type: Type.STRING },
+                  characters: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        id: {
+                          type: Type.STRING,
+                          enum: ['rafu', 'folk', 'boss', 'chacha', 'friend'],
+                        },
+                        name: { type: Type.STRING },
+                        side: { type: Type.STRING, enum: ['left', 'right', 'center'] },
+                        expression: {
+                          type: Type.STRING,
+                          enum: [
+                            'happy',
+                            'laughing',
+                            'shocked',
+                            'angry',
+                            'deadpan',
+                            'confused',
+                            'crying',
+                            'smug',
+                            'wink',
+                            'exhausted',
+                          ],
+                        },
+                        action: {
+                          type: Type.STRING,
+                          enum: [
+                            'idle',
+                            'walk_in',
+                            'laugh',
+                            'point_laugh',
+                            'panting',
+                            'shocked_jump',
+                            'eye_pop',
+                            'facepalm',
+                            'hands_up',
+                            'pour_water',
+                            'sip_tea',
+                            'run',
+                          ],
+                        },
+                        prop: {
+                          type: Type.STRING,
+                          enum: [
+                            'none',
+                            'umbrella_normal',
+                            'umbrella_upside_down',
+                            'broken_umbrella',
+                            'water_tap_glass',
+                            'tea_cup',
+                            'smartphone',
+                            'money',
+                            'laptop',
+                            'clock',
+                          ],
+                        },
+                        speech: { type: Type.STRING },
+                      },
+                      required: ['id', 'name', 'side', 'expression', 'action', 'prop'],
+                    },
+                  },
+                },
+                required: ['sceneIndex', 'durationSec', 'theme', 'camera', 'sfx', 'characters'],
+              },
+            },
+          },
+          required: ['title', 'fbCaption', 'scenes'],
+        },
+      },
+    });
+
+    const rawText = response.text?.trim();
+    if (!rawText) {
+      return res.status(502).json({ error: 'Empty response from Gemini API.' });
+    }
+
+    const parsed = JSON.parse(rawText);
+    const rawScenes = Array.isArray(parsed.scenes) ? parsed.scenes.slice(0, 4) : [];
+    const normalizedScenes = rawScenes.map((sc: Record<string, unknown>, idx: number) => ({
+      sceneIndex: idx,
+      durationSec: Math.max(2, Math.min(5.5, Number(sc.durationSec) || 3.5)),
+      theme: VALID_VIDEO_THEMES.includes(sc.theme as (typeof VALID_VIDEO_THEMES)[number])
+        ? sc.theme
+        : 'tea_stall',
+      camera: ['wide', 'zoom_left', 'zoom_right', 'zoom_center', 'shake'].includes(
+        String(sc.camera)
+      )
+        ? sc.camera
+        : 'wide',
+      sfx: ['none', 'laugh', 'gasp', 'thunder', 'pour', 'punchline', 'pop', 'sad_trombone'].includes(
+        String(sc.sfx)
+      )
+        ? sc.sfx
+        : 'pop',
+      captionTop: typeof sc.captionTop === 'string' ? sc.captionTop.slice(0, 42) : '',
+      characters: Array.isArray(sc.characters)
+        ? sc.characters.slice(0, 2).map((ch: Record<string, unknown>) => ({
+            ...ch,
+            speech: dialogueMode === 'silent' ? '' : String(ch.speech || '').slice(0, 42),
+          }))
+        : [],
+    }));
+
+    // Enforce 5-15 second total duration cleanly
+    let totalDurationSec = normalizedScenes.reduce(
+      (sum: number, s: { durationSec: number }) => sum + s.durationSec,
+      0
+    );
+    if (totalDurationSec > 15 && totalDurationSec > 0) {
+      const ratio = 14.5 / totalDurationSec;
+      normalizedScenes.forEach((s: { durationSec: number }) => {
+        s.durationSec = Math.max(1.8, Number((s.durationSec * ratio).toFixed(1)));
+      });
+      totalDurationSec = normalizedScenes.reduce(
+        (sum: number, s: { durationSec: number }) => sum + s.durationSec,
+        0
+      );
+    } else if (totalDurationSec < 5 && normalizedScenes.length > 0) {
+      normalizedScenes.forEach((s: { durationSec: number }) => {
+        s.durationSec = Math.max(2.5, s.durationSec);
+      });
+      totalDurationSec = normalizedScenes.reduce(
+        (sum: number, s: { durationSec: number }) => sum + s.durationSec,
+        0
+      );
+    }
+
+    const videoScript = {
+      id: `rfv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      title: String(parsed.title || 'রাফুর মজার কাণ্ড'),
+      category: chosenCategory,
+      aspectRatio: safeAspect,
+      musicStyle: safeMusic,
+      totalDurationSec: Number(totalDurationSec.toFixed(1)),
+      scenes: normalizedScenes,
+      fbCaption: String(parsed.fbCaption || 'কার সাথে এমন হয়েছে? 😂 #RafuFolk'),
+      createdAt: new Date().toISOString(),
+      seed: Math.floor(Math.random() * 900000) + 100000,
+    };
+
+    return res.json(videoScript);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to generate stickman video.';
+    console.error('Generate video error:', err);
+    return res.status(500).json({ error: message });
+  }
+});
+
 app.post('/api/facebook/verify', async (req, res) => {
   try {
     const { pageId, pageAccessToken } = req.body ?? {};
@@ -352,6 +608,83 @@ app.post('/api/facebook/publish', async (req, res) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to publish to Facebook Page.';
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/facebook/publish-video', uploadVideo.single('video'), async (req, res) => {
+  try {
+    const { pageId, pageAccessToken, title, description, scheduledPublishTime } = req.body ?? {};
+    const file = req.file;
+
+    if (!pageId || !pageAccessToken || !file) {
+      return res.status(400).json({
+        error: 'ভিডিও পোস্ট করার জন্য Page ID, Page Access Token এবং ভিডিও ফাইল প্রয়োজন।',
+      });
+    }
+
+    const cleanPageId = String(pageId).trim();
+    if (!/^[a-zA-Z0-9._-]+$/.test(cleanPageId)) {
+      return res.status(400).json({ error: 'সঠিক Facebook Page ID দিন।' });
+    }
+
+    const allowedMimes = ['video/mp4', 'video/webm', 'video/quicktime'];
+    const baseMime = String(file.mimetype || '').split(';')[0].trim().toLowerCase();
+    if (!allowedMimes.includes(baseMime)) {
+      return res.status(400).json({ error: 'কেবল MP4 বা WebM ভিডিও আপলোড করা যাবে।' });
+    }
+
+    const ext = baseMime === 'video/mp4' ? 'mp4' : 'webm';
+    const blob = new Blob([new Uint8Array(file.buffer)], { type: baseMime });
+
+    const form = new FormData();
+    form.append('source', blob, `rafu-folk-${Date.now()}.${ext}`);
+    form.append('title', String(title || '@@RAFU FOLK@@ Stick Comedy').slice(0, 255));
+    form.append('description', String(description || ''));
+
+    if (scheduledPublishTime !== undefined && scheduledPublishTime !== null && String(scheduledPublishTime).trim() !== '') {
+      const unixSec = Math.floor(Number(scheduledPublishTime));
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (!Number.isFinite(unixSec) || unixSec < nowSec + 600) {
+        return res.status(400).json({
+          error: 'Facebook শিডিউল সময় অবশ্যই বর্তমান সময়ের অন্তত ১০ মিনিট পরের হতে হবে।',
+        });
+      }
+      if (unixSec > nowSec + 30 * 24 * 60 * 60) {
+        return res.status(400).json({
+          error: 'Facebook সর্বোচ্চ ৩০ দিনের মধ্যে পোস্ট শিডিউল করতে দেয়।',
+        });
+      }
+      form.append('published', 'false');
+      form.append('scheduled_publish_time', String(unixSec));
+    } else {
+      form.append('published', 'true');
+    }
+
+    form.append('access_token', String(pageAccessToken).trim());
+
+    const fbRes = await fetch(
+      `https://graph-video.facebook.com/v21.0/${encodeURIComponent(cleanPageId)}/videos`,
+      {
+        method: 'POST',
+        body: form,
+      }
+    );
+    const data = await fbRes.json();
+
+    if (!fbRes.ok || data.error) {
+      return res.status(400).json({
+        error: data?.error?.message || 'Facebook Page-এ ভিডিও পোস্ট করা যায়নি।',
+      });
+    }
+
+    return res.json({
+      id: data.id,
+      postId: data.id,
+      scheduled: Boolean(scheduledPublishTime),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to publish video to Facebook Page.';
     return res.status(500).json({ error: message });
   }
 });

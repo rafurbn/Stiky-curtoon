@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   LayoutGrid,
+  Film,
   Stamp,
   Share2,
   History,
@@ -9,22 +10,27 @@ import {
 } from 'lucide-react';
 import { renderComicToCanvas } from './lib/cartoonRenderer';
 import { STARTER_COMIC, STARTER_COMICS } from './lib/defaultComic';
+import { STARTER_VIDEO, STARTER_VIDEOS } from './lib/defaultVideos';
+import type { RenderedVideoResult } from './lib/videoRenderer';
 import {
   computeUpcomingBdSlots,
   DEFAULT_BD_SLOTS,
   formatBdTimeLabel,
+  getBdDateKey,
 } from './lib/scheduleHelper';
-import type { AutomationSettings, ComicItem, LayoutMode } from './types/comic';
+import type { AutomationSettings, ComicItem, LayoutMode, VideoItem } from './types/comic';
 import { RafuFolkLogo } from './components/RafuFolkLogo';
 import { StudioView } from './components/StudioView';
+import { VideoStudioView } from './components/VideoStudioView';
 import { BrandingView } from './components/BrandingView';
 import { FacebookAutoView } from './components/FacebookAutoView';
 import { HistoryQueueView } from './components/HistoryQueueView';
 
-type NavTab = 'studio' | 'branding' | 'automation' | 'history';
+type NavTab = 'studio' | 'video' | 'branding' | 'automation' | 'history';
 
 const STORAGE_SETTINGS_KEY = 'rafu_folk_settings_v2';
 const STORAGE_COMICS_KEY = 'rafu_folk_comics_v2';
+const STORAGE_VIDEOS_KEY = 'rafu_folk_videos_v1';
 
 const DEFAULT_SETTINGS: AutomationSettings = {
   logoText: '@@RAFU FOLK@@',
@@ -75,6 +81,17 @@ function loadSavedComics(): ComicItem[] {
   }
 }
 
+function loadSavedVideos(): VideoItem[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_VIDEOS_KEY);
+    if (!raw) return STARTER_VIDEOS;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : STARTER_VIDEOS;
+  } catch {
+    return STARTER_VIDEOS;
+  }
+}
+
 async function renderOffscreenPng(
   comic: ComicItem,
   settings: AutomationSettings
@@ -93,6 +110,10 @@ export default function App() {
   const [comics, setComics] = useState<ComicItem[]>(loadSavedComics);
   const [activeComicId, setActiveComicId] = useState<string>(
     () => loadSavedComics()[0]?.id || STARTER_COMIC.id
+  );
+  const [videos, setVideos] = useState<VideoItem[]>(loadSavedVideos);
+  const [activeVideoId, setActiveVideoId] = useState<string>(
+    () => loadSavedVideos()[0]?.id || STARTER_VIDEO.id
   );
   const [isGenerating, setIsGenerating] = useState(false);
   const [publishingId, setPublishingId] = useState<string | null>(null);
@@ -115,6 +136,8 @@ export default function App() {
 
   const activeComic =
     comics.find((c) => c.id === activeComicId) || comics[0] || STARTER_COMIC;
+  const activeVideo =
+    videos.find((v) => v.id === activeVideoId) || videos[0] || STARTER_VIDEO;
 
   useEffect(() => {
     try {
@@ -132,6 +155,14 @@ export default function App() {
     }
   }, [comics]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_VIDEOS_KEY, JSON.stringify(videos.slice(0, 30)));
+    } catch {
+      // Ignore storage quota issues
+    }
+  }, [videos]);
+
   const updateSettings = useCallback((patch: Partial<AutomationSettings>) => {
     setSettings((prev) => ({ ...prev, ...patch }));
   }, []);
@@ -142,10 +173,15 @@ export default function App() {
     );
   }, []);
 
+  const updateVideo = useCallback((updated: VideoItem) => {
+    setVideos((prev) =>
+      prev.map((item) => (item.id === updated.id ? updated : item))
+    );
+  }, []);
+
   const todayAutoCount = comics.filter((c) => {
     if (c.status !== 'published' || !c.publishedAt) return false;
-    const today = new Date().toISOString().slice(0, 10);
-    return c.publishedAt.slice(0, 10) === today;
+    return getBdDateKey(c.publishedAt) === getBdDateKey();
   }).length;
 
   const publishedTotal = comics.filter((c) => c.status === 'published').length;
@@ -323,6 +359,49 @@ export default function App() {
     [activeComic.id, settings, updateComic]
   );
 
+  const publishVideoItem = useCallback(
+    async (
+      video: VideoItem,
+      rendered: RenderedVideoResult,
+      scheduledDate?: Date
+    ) => {
+      if (!settings.pageId || !settings.pageAccessToken) {
+        throw new Error(
+          'ভিডিও পোস্ট/শিডিউল করার আগে "Facebook অটো-পোস্ট" ট্যাবে Page ID ও Access Token দিন।'
+        );
+      }
+
+      const form = new FormData();
+      form.append('video', rendered.blob, `rafu-folk-${video.id}.${rendered.extension}`);
+      form.append('pageId', settings.pageId);
+      form.append('pageAccessToken', settings.pageAccessToken);
+      form.append('title', video.title);
+      form.append('description', video.fbCaption);
+      if (scheduledDate) {
+        form.append('scheduledPublishTime', String(Math.floor(scheduledDate.getTime() / 1000)));
+      }
+
+      const res = await fetch('/api/facebook/publish-video', {
+        method: 'POST',
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Facebook Page-এ ভিডিও পোস্ট করা যায়নি।');
+      }
+
+      updateVideo({
+        ...video,
+        status: scheduledDate ? 'scheduled' : 'published',
+        scheduledFor: scheduledDate ? scheduledDate.toISOString() : undefined,
+        publishedAt: scheduledDate ? undefined : new Date().toISOString(),
+        fbPostId: data.postId || data.id,
+        errorMessage: undefined,
+      });
+    },
+    [settings.pageId, settings.pageAccessToken, updateVideo]
+  );
+
   const handleGenerateAndPublish = useCallback(
     async (opts: {
       category: string;
@@ -475,7 +554,7 @@ export default function App() {
     [activeComic.id, settings]
   );
 
-  // Compute next Bangladesh Time daily slot when live browser Auto-Pilot is active
+  // Compute next Bangladesh Time daily slot when live browser Auto-Pilot is active (0-min buffer so immediate slots aren't skipped)
   useEffect(() => {
     if (!settings.autoPilotEnabled) {
       setNextAutoRunAt(null);
@@ -483,7 +562,7 @@ export default function App() {
     }
     const slots = settings.dailySlots?.length ? settings.dailySlots : DEFAULT_BD_SLOTS;
     const jitter = settings.useExactSlots ? 0 : settings.randomJitterMinutes;
-    const [nextSlot] = computeUpcomingBdSlots(slots, 1, jitter);
+    const [nextSlot] = computeUpcomingBdSlots(slots, 1, jitter, new Date(), 0);
     setNextAutoRunAt(nextSlot ? nextSlot.toISOString() : null);
   }, [
     settings.autoPilotEnabled,
@@ -512,7 +591,7 @@ export default function App() {
 
       const slots = settings.dailySlots?.length ? settings.dailySlots : DEFAULT_BD_SLOTS;
       const jitter = settings.useExactSlots ? 0 : settings.randomJitterMinutes;
-      const [nextSlot] = computeUpcomingBdSlots(slots, 1, jitter);
+      const [nextSlot] = computeUpcomingBdSlots(slots, 1, jitter, new Date(), 0);
       setNextAutoRunAt(nextSlot ? nextSlot.toISOString() : null);
     }, 15_000);
 
@@ -528,6 +607,7 @@ export default function App() {
 
   const navItems: Array<{ id: NavTab; label: string; icon: typeof LayoutGrid }> = [
     { id: 'studio', label: 'কার্টুন স্টুডিও', icon: LayoutGrid },
+    { id: 'video', label: 'ভিডিও স্টুডিও', icon: Film },
     { id: 'branding', label: 'লোগো ব্র্যান্ডিং', icon: Stamp },
     { id: 'automation', label: 'Facebook অটো-পোস্ট', icon: Share2 },
     { id: 'history', label: 'হিস্ট্রি ও কিউ', icon: History },
@@ -535,6 +615,7 @@ export default function App() {
 
   const pageTitleMap: Record<NavTab, string> = {
     studio: 'কার্টুন স্টুডিও',
+    video: '৫–১৫ সে. ভিডিও স্টুডিও',
     branding: 'লোগো ব্র্যান্ডিং',
     automation: 'Facebook অটো-পোস্ট',
     history: 'হিস্ট্রি ও কিউ',
@@ -701,6 +782,26 @@ export default function App() {
               onCanvasReady={(el) => {
                 canvasRef.current = el;
               }}
+            />
+          )}
+
+          {activeTab === 'video' && (
+            <VideoStudioView
+              video={activeVideo}
+              videos={videos}
+              settings={settings}
+              onSelectVideo={(vid) => {
+                setVideos((prev) =>
+                  prev.some((v) => v.id === vid.id) ? prev : [vid, ...prev]
+                );
+                setActiveVideoId(vid.id);
+              }}
+              onUpdateVideo={updateVideo}
+              onCreateVideo={(newVid) => {
+                setVideos((prev) => [newVid, ...prev]);
+                setActiveVideoId(newVid.id);
+              }}
+              onPublishVideo={publishVideoItem}
             />
           )}
 
