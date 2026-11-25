@@ -389,8 +389,16 @@ export async function startVideoAudioSession(
   }
 
   const dest = ctx.createMediaStreamDestination();
+  const compressor = ctx.createDynamicsCompressor();
+  compressor.threshold.value = -16;
+  compressor.knee.value = 12;
+  compressor.ratio.value = 4.5;
+  compressor.attack.value = 0.004;
+  compressor.release.value = 0.14;
+
   const masterGain = ctx.createGain();
-  masterGain.gain.value = 0.92;
+  masterGain.gain.value = 1.0;
+  compressor.connect(masterGain);
   masterGain.connect(dest);
 
   if (!muteSpeaker) {
@@ -398,16 +406,16 @@ export async function startVideoAudioSession(
   }
 
   const musicGain = ctx.createGain();
-  musicGain.gain.value = 0.55;
-  musicGain.connect(masterGain);
+  musicGain.gain.value = 0.36;
+  musicGain.connect(compressor);
 
   const sfxGain = ctx.createGain();
-  sfxGain.gain.value = 0.95;
-  sfxGain.connect(masterGain);
+  sfxGain.gain.value = 0.88;
+  sfxGain.connect(compressor);
 
   const voiceGain = ctx.createGain();
-  voiceGain.gain.value = 1.05;
-  voiceGain.connect(masterGain);
+  voiceGain.gain.value = 1.65;
+  voiceGain.connect(compressor);
 
   const totalSec = script.scenes.reduce((acc, s) => acc + Math.max(1.5, s.durationSec), 0);
 
@@ -415,6 +423,8 @@ export async function startVideoAudioSession(
 
   const baseTime = ctx.currentTime + 0.05;
   let cursor = 0;
+
+  const duckWindows: Array<{ start: number; end: number }> = [];
 
   for (let sIdx = 0; sIdx < script.scenes.length; sIdx++) {
     const sc = script.scenes[sIdx];
@@ -427,7 +437,6 @@ export async function startVideoAudioSession(
       triggerSfx(ctx, sfxGain, sc.sfx, when);
     }
 
-    // Check custom uploaded/recorded audio per character first
     for (let cIdx = 0; cIdx < sc.characters.length; cIdx++) {
       const ch = sc.characters[cIdx];
       if (ch.customAudioDataUrl) {
@@ -442,16 +451,19 @@ export async function startVideoAudioSession(
             const delay = Math.max(0, absStart - startOffsetSec);
             const trimStart = Math.max(0, startOffsetSec - absStart);
             src.start(baseTime + delay, trimStart);
+            duckWindows.push({
+              start: baseTime + delay,
+              end: baseTime + delay + Math.max(0.2, buf.duration - trimStart),
+            });
           }
         }
       }
     }
   }
 
-  // Schedule AI synthesized voiceClips (skip if character has customAudioDataUrl override)
   const clips: VideoVoiceClip[] = Array.isArray(script.voiceClips) ? script.voiceClips : [];
   if (clips.length > 0) {
-    let sceneOffsets: number[] = [];
+    const sceneOffsets: number[] = [];
     let acc = 0;
     for (const sc of script.scenes) {
       sceneOffsets.push(acc);
@@ -475,8 +487,22 @@ export async function startVideoAudioSession(
         const delay = Math.max(0, absStart - startOffsetSec);
         const trimStart = Math.max(0, startOffsetSec - absStart);
         src.start(baseTime + delay, trimStart);
+        duckWindows.push({
+          start: baseTime + delay,
+          end: baseTime + delay + Math.max(0.2, buf.duration - trimStart),
+        });
       }
     }
+  }
+
+  // Auto-duck background music whenever someone is speaking or shouting
+  for (const w of duckWindows) {
+    const t0 = Math.max(ctx.currentTime, w.start - 0.08);
+    const t1 = Math.max(t0 + 0.05, w.end + 0.12);
+    musicGain.gain.setValueAtTime(0.36, t0);
+    musicGain.gain.linearRampToValueAtTime(0.09, t0 + 0.08);
+    musicGain.gain.setValueAtTime(0.09, t1);
+    musicGain.gain.linearRampToValueAtTime(0.36, t1 + 0.18);
   }
 
   let stopped = false;

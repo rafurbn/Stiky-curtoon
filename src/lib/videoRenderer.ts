@@ -10,6 +10,11 @@ import type {
   VideoTheme,
 } from '../types/comic';
 import { startVideoAudioSession } from './videoAudioEngine';
+import {
+  prepareLipSyncForScript,
+  sampleCharacterLipSync,
+  type LipSyncSample,
+} from './lipSyncAnalyzer';
 
 export interface RenderedVideoResult {
   blob: Blob;
@@ -413,6 +418,97 @@ function drawStickProp(
   ctx.restore();
 }
 
+function drawAnimatedMouth(
+  ctx: CanvasRenderingContext2D,
+  mx: number,
+  my: number,
+  lip: LipSyncSample,
+  expression: VideoCharacterState['expression'],
+  baseWidth = 15,
+  maxOpen = 16
+) {
+  ctx.save();
+  ctx.lineWidth = 3.2;
+  ctx.strokeStyle = '#111827';
+
+  if (lip.openness > 0.08 && lip.viseme !== 'closed') {
+    const rx = baseWidth * lip.width;
+    const ry = Math.max(4, lip.openness * maxOpen);
+
+    if (lip.viseme === 'wide_shout') {
+      // Wide open shouting jaw with upper teeth & tongue
+      ctx.fillStyle = '#111827';
+      ctx.beginPath();
+      ctx.ellipse(mx, my + ry * 0.25, rx * 1.15, ry * 1.18, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Upper teeth strip
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.roundRect(mx - rx * 0.78, my - ry * 0.85, rx * 1.56, Math.max(4, ry * 0.34), 2);
+      ctx.fill();
+
+      // Tongue arc at bottom
+      ctx.fillStyle = '#94A3B8';
+      ctx.beginPath();
+      ctx.ellipse(mx, my + ry * 0.9, rx * 0.58, Math.max(3, ry * 0.3), 0, Math.PI, Math.PI * 2);
+      ctx.fill();
+    } else if (lip.viseme === 'round_o') {
+      // Classic cartoon round 'O' shout/vowel
+      ctx.fillStyle = '#111827';
+      ctx.beginPath();
+      ctx.ellipse(mx, my + 2, rx * 0.72, Math.max(7, ry * 1.05), 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (lip.viseme === 'consonant') {
+      // Narrow teeth/consonant aperture
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.roundRect(mx - rx, my - 4, rx * 2, Math.max(7, ry * 0.65), 4);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(mx - rx + 2, my);
+      ctx.lineTo(mx + rx - 2, my);
+      ctx.stroke();
+    } else {
+      // mid_vowel oval mouth
+      ctx.fillStyle = '#111827';
+      ctx.beginPath();
+      ctx.ellipse(mx, my + 2, rx, Math.max(5, ry * 0.85), 0, 0, Math.PI * 2);
+      ctx.fill();
+      if (ry > 7) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(mx - rx * 0.65, my - ry * 0.55, rx * 1.3, 3.5);
+      }
+    }
+    ctx.restore();
+    return;
+  }
+
+  // Resting expression mouth when silent/paused between words
+  if (expression === 'laughing' || expression === 'shocked') {
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.ellipse(mx, my + 2, baseWidth * 0.9, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (expression === 'crying' || expression === 'angry') {
+    ctx.beginPath();
+    ctx.arc(mx, my + 9, baseWidth * 0.85, Math.PI * 1.15, Math.PI * 1.85);
+    ctx.stroke();
+  } else if (expression === 'happy' || expression === 'smug') {
+    ctx.beginPath();
+    ctx.arc(mx, my - 4, baseWidth * 0.85, Math.PI * 0.15, Math.PI * 0.85);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(mx - baseWidth * 0.72, my + 2);
+    ctx.lineTo(mx + baseWidth * 0.72, my + 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawStickMemeCharacter(
   ctx: CanvasRenderingContext2D,
   char: VideoCharacterState,
@@ -422,7 +518,7 @@ function drawStickMemeCharacter(
   globalT: number,
   localT: number,
   sceneDur: number,
-  isSpeaking: boolean,
+  lip: LipSyncSample,
   scale = 1
 ) {
   ctx.save();
@@ -453,9 +549,11 @@ function drawStickMemeCharacter(
     }
     ctx.restore();
 
-    // Big shoulders + stick neck
-    const shakeX = isSpeaking ? Math.sin(globalT * 28) * 3 : 0;
-    ctx.translate(cx + shakeX, cy);
+    // Big shoulders + stick neck with subtle speech-loudness shake
+    const isAudible = lip.openness > 0.12;
+    const shakeX = isAudible ? Math.sin(globalT * 32) * (2 + lip.openness * 4) : 0;
+    const shakeY = lip.viseme === 'wide_shout' ? Math.cos(globalT * 26) * 2.5 : 0;
+    ctx.translate(cx + shakeX, cy + shakeY);
     ctx.lineWidth = 5;
 
     ctx.beginPath();
@@ -480,13 +578,14 @@ function drawStickMemeCharacter(
     ctx.arc(96, 8, 16, -Math.PI * 0.5, Math.PI * 0.5);
     ctx.stroke();
 
-    // Angry furrowed eyebrows
+    // Angry furrowed eyebrows reacting to shout loudness
+    const browDip = lip.openness * 6;
     ctx.lineWidth = 5.5;
     ctx.beginPath();
-    ctx.moveTo(-64, -44);
-    ctx.lineTo(-16, -24);
-    ctx.moveTo(64, -44);
-    ctx.lineTo(16, -24);
+    ctx.moveTo(-64, -44 - browDip * 0.4);
+    ctx.lineTo(-16, -24 + browDip);
+    ctx.moveTo(64, -44 - browDip * 0.4);
+    ctx.lineTo(16, -24 + browDip);
     ctx.stroke();
 
     // Intense glare eyes
@@ -511,16 +610,8 @@ function drawStickMemeCharacter(
     ctx.quadraticCurveTo(0, 6, 8, 16);
     ctx.stroke();
 
-    // Dramatic shouting mouth
-    const openAmt = isSpeaking ? 26 + Math.abs(Math.sin(globalT * 20)) * 22 : 10;
-    ctx.fillStyle = '#111827';
-    ctx.beginPath();
-    ctx.ellipse(0, 56, 40, openAmt, 0, 0, Math.PI * 2);
-    ctx.fill();
-    if (openAmt > 16) {
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(-26, 56 - openAmt + 3, 52, 7);
-    }
+    // Audio-reactive dramatic shouting mouth
+    drawAnimatedMouth(ctx, 0, 56, lip, 'angry', 36, 44);
 
     ctx.restore();
     return;
@@ -727,9 +818,10 @@ function drawStickMemeCharacter(
     ctx.stroke();
   }
 
-  // Head! Special elongated jaw for 'scream_jaw'
+  // Head! Special audio-reactive elongated jaw for 'scream_jaw'
   if (action === 'scream_jaw') {
-    const jawDrop = 34 + Math.abs(Math.sin(globalT * 18)) * 24;
+    const audioDrop = lip.openness > 0.08 ? lip.openness * 38 : Math.abs(Math.sin(globalT * 18)) * 18;
+    const jawDrop = 28 + audioDrop;
     ctx.save();
     ctx.translate(0, -228);
 
@@ -753,14 +845,14 @@ function drawStickMemeCharacter(
     ctx.arc(12, -52, 4, 0, Math.PI * 2);
     ctx.fill();
 
-    // Giant open screaming mouth with teeth row
+    // Giant open audio-reactive screaming mouth
     ctx.fillStyle = '#111827';
     ctx.beginPath();
-    ctx.ellipse(0, -4 + jawDrop * 0.3, 24, 24 + jawDrop * 0.35, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, -4 + jawDrop * 0.3, 24 * lip.width, 20 + jawDrop * 0.36, 0, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(-16, -24, 32, 7);
+    ctx.fillRect(-16, -22, 32, 7);
     ctx.restore();
     ctx.restore();
     return;
@@ -837,36 +929,9 @@ function drawStickMemeCharacter(
     ctx.stroke();
   }
 
-  // Mouth animation when speaking or expressing
-  const talkOpen = isSpeaking ? 5 + Math.abs(Math.sin(globalT * 18)) * 10 : 0;
-  ctx.lineWidth = 3.2;
-  if (talkOpen > 2 || char.expression === 'laughing' || char.expression === 'shocked') {
-    ctx.fillStyle = '#111827';
-    ctx.beginPath();
-    ctx.ellipse(
-      eyeOffsetX,
-      headY + 20,
-      14,
-      Math.max(7, talkOpen || 11),
-      0,
-      0,
-      Math.PI * 2
-    );
-    ctx.fill();
-  } else if (char.expression === 'crying' || char.expression === 'angry') {
-    ctx.beginPath();
-    ctx.arc(eyeOffsetX, headY + 28, 13, Math.PI * 1.15, Math.PI * 1.85);
-    ctx.stroke();
-  } else if (char.expression === 'happy' || char.expression === 'smug') {
-    ctx.beginPath();
-    ctx.arc(eyeOffsetX, headY + 14, 13, Math.PI * 0.15, Math.PI * 0.85);
-    ctx.stroke();
-  } else {
-    ctx.beginPath();
-    ctx.moveTo(-11 + eyeOffsetX, headY + 20);
-    ctx.lineTo(11 + eyeOffsetX, headY + 20);
-    ctx.stroke();
-  }
+  // Audio-reactive multi-viseme mouth + subtle speech bounce
+  const talkHeadLift = lip.openness > 0.15 ? -lip.openness * 3.5 : 0;
+  drawAnimatedMouth(ctx, eyeOffsetX, headY + 20 + talkHeadLift, lip, char.expression, 15, 19);
 
   ctx.restore();
 }
@@ -958,8 +1023,7 @@ function drawColoredCartoonCharacter(
   baseX: number,
   groundY: number,
   facing: 1 | -1,
-  globalT: number,
-  isSpeaking: boolean
+  lip: LipSyncSample
 ) {
   const look = getCharacterAppearance(char.id);
   ctx.save();
@@ -1003,18 +1067,8 @@ function drawColoredCartoonCharacter(
   ctx.arc(14 + ex, -220, 3.5, 0, Math.PI * 2);
   ctx.fill();
 
-  // Mouth
-  const open = isSpeaking ? 4 + Math.abs(Math.sin(globalT * 18)) * 8 : 0;
-  ctx.fillStyle = '#0F172A';
-  if (open > 2) {
-    ctx.beginPath();
-    ctx.ellipse(ex, -196, 12, open, 0, 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    ctx.beginPath();
-    ctx.arc(ex, -200, 10, 0.15 * Math.PI, 0.85 * Math.PI);
-    ctx.stroke();
-  }
+  // Audio-reactive viseme mouth
+  drawAnimatedMouth(ctx, ex, -196, lip, char.expression, 13, 16);
 
   ctx.restore();
 }
@@ -1115,6 +1169,7 @@ export function renderVideoFrame(
       }
 
       const isSpeaking = activeSpeaker?.charIndex === idx;
+      const lip = sampleCharacterLipSync(script, sceneIndex, idx, localT, isSpeaking);
       drawStickMemeCharacter(
         ctx,
         char,
@@ -1124,7 +1179,7 @@ export function renderVideoFrame(
         elapsedSec,
         localT,
         scene.durationSec,
-        isSpeaking,
+        lip,
         scene.splitScreen ? 0.9 : 1.05
       );
     });
@@ -1138,7 +1193,8 @@ export function renderVideoFrame(
             : w * 0.72;
       const facing: 1 | -1 = char.side === 'right' ? -1 : 1;
       const isSpeaking = activeSpeaker?.charIndex === idx;
-      drawColoredCartoonCharacter(ctx, char, cx, groundY, facing, elapsedSec, isSpeaking);
+      const lip = sampleCharacterLipSync(script, sceneIndex, idx, localT, isSpeaking);
+      drawColoredCartoonCharacter(ctx, char, cx, groundY, facing, lip);
     });
   }
 
@@ -1260,6 +1316,8 @@ export async function recordVideoFromScript(
   if (!ctx) {
     throw new Error('Canvas 2D context unavailable.');
   }
+
+  await prepareLipSyncForScript(script);
 
   const totalSec = script.scenes.reduce(
     (sum, s) => sum + Math.max(1.5, s.durationSec),

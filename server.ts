@@ -725,30 +725,33 @@ async function applyVoiceFxWithFfmpeg(
   let extraFilters = '';
 
   if (voiceEffect === 'panicked') {
-    pitch = 1.13;
-    tempo = 1.15;
+    pitch = 1.15;
+    tempo = 1.18;
+    extraFilters =
+      ',treble=g=4:f=3200,acompressor=threshold=-20dB:ratio=4.5:attack=4:release=55,volume=2.3,alimiter=limit=0.95';
   } else if (voiceEffect === 'dramatic_boss') {
-    pitch = 0.78;
-    tempo = 0.92;
-    extraFilters = ',bass=g=6:f=110,aecho=0.8:0.75:48:0.36';
+    pitch = 0.77;
+    tempo = 0.90;
+    extraFilters =
+      ',bass=g=8:f=105,aecho=0.8:0.75:48:0.38,acompressor=threshold=-18dB:ratio=5:attack=4:release=75,volume=2.45,alimiter=limit=0.95';
   } else if (voiceEffect === 'cartoon_high') {
-    pitch = 1.22;
-    tempo = 1.09;
+    pitch = 1.24;
+    tempo = 1.12;
+    extraFilters =
+      ',treble=g=3:f=2800,acompressor=threshold=-19dB:ratio=4:attack=5:release=60,volume=2.15,alimiter=limit=0.95';
   } else {
     const defaults: Record<string, { p: number; t: number }> = {
-      rafu: { p: 1.07, t: 1.06 },
-      folk: { p: 0.96, t: 1.0 },
+      rafu: { p: 1.08, t: 1.07 },
+      folk: { p: 0.96, t: 1.02 },
       boss: { p: 0.84, t: 0.96 },
       chacha: { p: 0.88, t: 0.95 },
-      friend: { p: 1.08, t: 1.06 },
+      friend: { p: 1.09, t: 1.07 },
     };
     const d = defaults[characterId] || { p: 1.0, t: 1.0 };
     pitch = d.p;
     tempo = d.t;
-  }
-
-  if (pitch === 1.0 && tempo === 1.0 && !extraFilters) {
-    return rawBuffer;
+    extraFilters =
+      ',acompressor=threshold=-20dB:ratio=3.5:attack=5:release=70,volume=1.95,alimiter=limit=0.95';
   }
 
   const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -773,7 +776,7 @@ async function applyVoiceFxWithFfmpeg(
         '-c:a',
         'libmp3lame',
         '-b:a',
-        '64k',
+        '96k',
         outPath,
       ]);
       proc.on('error', reject);
@@ -867,15 +870,32 @@ async function synthesizeWithGeminiTts(
   const persona = CHARACTER_VOICE_MAP[characterId] || CHARACTER_VOICE_MAP.rafu;
   const styleHint =
     voiceEffect === 'dramatic_boss'
-      ? 'Deep cinematic heroic movie dubbing style, dramatic pause and intense bass delivery'
+      ? 'Loud, roaring, furious dramatic movie villain shouting in Bangladeshi Bengali with heavy intensity'
       : voiceEffect === 'panicked'
-        ? 'Urgent, panicked, desperate fast comedic delivery'
-        : persona.geminiStyle;
+        ? 'Loud, frantic, desperate panicked shouting and crying in Bangladeshi Bengali, urgent high energy'
+        : voiceEffect === 'cartoon_high'
+          ? 'Loud, excited, animated funny cartoon shouting in Bangladeshi Bengali'
+          : `${persona.geminiStyle}, expressive loud comedic Bangladeshi Bengali delivery`;
 
   const ai = getGeminiClient();
+  const useExpressiveModel =
+    voiceEffect === 'dramatic_boss' || voiceEffect === 'panicked' || voiceEffect === 'cartoon_high';
+
   const response = await ai.models.generateContent({
-    model: 'gemini-3.8-flash-lite-tts',
-    contents: `${styleHint}. Speak naturally in Bangladeshi Bengali: ${text}`,
+    model: useExpressiveModel ? 'gemini-3.8-flash-tts' : 'gemini-3.8-flash-lite-tts',
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            text,
+            speechMetadata: {
+              style: styleHint,
+            },
+          },
+        ],
+      },
+    ],
     config: {
       responseModalities: ['AUDIO'],
       speechConfig: {
@@ -892,17 +912,14 @@ async function synthesizeWithGeminiTts(
   if (!base64Audio) throw new Error('Empty Gemini TTS audio output');
   const rawBuffer = Buffer.from(base64Audio, 'base64');
 
-  if (voiceEffect === 'dramatic_boss' || voiceEffect === 'panicked' || voiceEffect === 'cartoon_high') {
-    try {
-      const fxBuffer = await applyVoiceFxWithFfmpeg(rawBuffer, 'wav', characterId, voiceEffect);
-      const durationSec = await getAudioDurationWithFfmpeg(fxBuffer, 'mp3');
-      return { buffer: fxBuffer, mime: 'audio/mpeg', durationSec };
-    } catch {
-      // fallback to raw wav
-    }
+  try {
+    const fxBuffer = await applyVoiceFxWithFfmpeg(rawBuffer, 'wav', characterId, voiceEffect);
+    const durationSec = await getAudioDurationWithFfmpeg(fxBuffer, 'mp3');
+    return { buffer: fxBuffer, mime: 'audio/mpeg', durationSec };
+  } catch {
+    const durationSec = getWavDurationSec(rawBuffer);
+    return { buffer: rawBuffer, mime: 'audio/wav', durationSec };
   }
-  const durationSec = getWavDurationSec(rawBuffer);
-  return { buffer: rawBuffer, mime: 'audio/wav', durationSec };
 }
 
 app.post('/api/video/synthesize-voices', async (req, res) => {
@@ -952,11 +969,20 @@ app.post('/api/video/synthesize-voices', async (req, res) => {
         const cleanSpeech = stripEmojisForTts(rawSpeech);
         if (!cleanSpeech) continue;
 
-        const effect = String(ch.voiceEffect || 'normal');
+        let effect = String(ch.voiceEffect || 'normal');
+        if (effect === 'normal' && (rawSpeech.includes('!') || rawSpeech.includes('?!'))) {
+          effect = 'panicked';
+        }
+
         let synth: { buffer: Buffer; mime: string; durationSec: number } | null = null;
         let usedProvider: 'edge_tts' | 'gemini_tts' = 'edge_tts';
 
-        if (voiceEngine === 'gemini_tts' && process.env.GEMINI_API_KEY) {
+        const tryGeminiFirst =
+          Boolean(process.env.GEMINI_API_KEY) &&
+          (voiceEngine === 'gemini_tts' ||
+            (voiceEngine === 'auto' && (effect === 'dramatic_boss' || effect === 'panicked')));
+
+        if (tryGeminiFirst) {
           try {
             synth = await synthesizeWithGeminiTts(cleanSpeech, ch.id, effect);
             usedProvider = 'gemini_tts';

@@ -46,6 +46,7 @@ import {
   type RenderedVideoResult,
 } from '../lib/videoRenderer';
 import { startVideoAudioSession, type AudioSession } from '../lib/videoAudioEngine';
+import { prepareLipSyncForScript } from '../lib/lipSyncAnalyzer';
 import { getRenderedVideoBlobFromVault } from '../lib/videoStorage';
 
 interface VideoStudioViewProps {
@@ -237,14 +238,63 @@ export function VideoStudioView({
     }
   }, [video, settings, elapsedSec, isPlaying]);
 
+  useEffect(() => {
+    if (video.voiceClips && video.voiceClips.length > 0) {
+      prepareLipSyncForScript(video).catch(() => {});
+    }
+  }, [video.id, video.voiceClips]);
+
+  const needsVoiceSynthesis = (target: VideoItem): boolean => {
+    if ((target.voiceEngine || voiceEngine) === 'none') return false;
+    const existing = Array.isArray(target.voiceClips) ? target.voiceClips : [];
+    for (let sIdx = 0; sIdx < target.scenes.length; sIdx++) {
+      const sc = target.scenes[sIdx];
+      for (let cIdx = 0; cIdx < sc.characters.length; cIdx++) {
+        const ch = sc.characters[cIdx];
+        if (ch.customAudioDataUrl) continue;
+        const speech = (ch.speech || '').trim();
+        if (!speech) continue;
+        const matched = existing.find(
+          (c) => c.sceneIndex === sIdx && c.charIndex === cIdx && c.text.trim() === speech
+        );
+        if (!matched) return true;
+      }
+    }
+    return false;
+  };
+
   const startPlayback = async (fromSec = elapsedSec) => {
     stopPlayback();
-    const startAt = fromSec >= totalDuration - 0.1 ? 0 : fromSec;
+
+    let workingVideo = video;
+    if (needsVoiceSynthesis(video)) {
+      setStatusMsg({
+        type: 'ok',
+        text: 'স্ক্রিপ্ট অনুযায়ী লাউড বাংলা ভয়েস ও লিপ-সিংক তৈরি হচ্ছে...',
+      });
+      try {
+        workingVideo = await handleSynthesizeVoicesForScript(video, voiceEngine);
+        setStatusMsg(null);
+      } catch (err) {
+        setStatusMsg({
+          type: 'err',
+          text: err instanceof Error ? err.message : 'ভয়েস তৈরি করা যায়নি, সাউন্ড ইফেক্টসহ চলছে।',
+        });
+      }
+    }
+
+    await prepareLipSyncForScript(workingVideo).catch(() => {});
+
+    const workingTotalDuration = workingVideo.scenes.reduce(
+      (acc, s) => acc + Math.max(1.5, s.durationSec),
+      0
+    );
+    const startAt = fromSec >= workingTotalDuration - 0.1 ? 0 : fromSec;
     setElapsedSec(startAt);
     setIsPlaying(true);
 
     try {
-      const session = await startVideoAudioSession(video, startAt, false);
+      const session = await startVideoAudioSession(workingVideo, startAt, false);
       audioSessionRef.current = session;
     } catch {
       // Ignore audio block if autoplay prevented
@@ -255,18 +305,23 @@ export function VideoStudioView({
       const nowElapsed = startAt + (performance.now() - startWall) / 1000;
       const canvas = canvasRef.current;
       if (canvas) {
-        const dims = getVideoDimensions(video.aspectRatio);
+        const dims = getVideoDimensions(workingVideo.aspectRatio);
         if (canvas.width !== dims.width || canvas.height !== dims.height) {
           canvas.width = dims.width;
           canvas.height = dims.height;
         }
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          renderVideoFrame(ctx, video, settings, Math.min(nowElapsed, totalDuration - 0.01));
+          renderVideoFrame(
+            ctx,
+            workingVideo,
+            settings,
+            Math.min(nowElapsed, workingTotalDuration - 0.01)
+          );
         }
       }
 
-      if (nowElapsed >= totalDuration) {
+      if (nowElapsed >= workingTotalDuration) {
         setElapsedSec(0);
         stopPlayback();
         return;
