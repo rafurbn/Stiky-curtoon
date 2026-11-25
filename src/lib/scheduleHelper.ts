@@ -1,6 +1,5 @@
 // Bangladesh Standard Time (Asia/Dhaka) is permanently UTC+6 (no DST).
 const BD_OFFSET_MS = 6 * 60 * 60 * 1000;
-
 export const DEFAULT_BD_SLOTS = ['08:30', '15:00', '19:50'];
 
 export function getBdDateKey(date: Date | string = new Date()): string {
@@ -26,14 +25,11 @@ export function computeUpcomingBdSlots(
     })
     .sort((a, b) => a.h * 60 + a.m - (b.h * 60 + b.m));
 
-  // Minimum 15 minutes ahead for Meta Graph API scheduled_publish_time (>= 10 min), or 0 for live Auto-Pilot
   const minAllowedUtcMs = fromDate.getTime() + minBufferMinutes * 60 * 1000;
   const bdNow = new Date(fromDate.getTime() + BD_OFFSET_MS);
-
   const startYear = bdNow.getUTCFullYear();
   const startMonth = bdNow.getUTCMonth();
   const startDay = bdNow.getUTCDate();
-
   const results: Date[] = [];
   let dayOffset = 0;
 
@@ -43,12 +39,10 @@ export function computeUpcomingBdSlots(
       const bdWallUtcMs =
         Date.UTC(startYear, startMonth, startDay + dayOffset, slot.h, slot.m, 0) -
         BD_OFFSET_MS;
-
       const jitterOffsetMs =
         jitterMinutes > 0
           ? Math.round((Math.random() * 2 - 1) * jitterMinutes) * 60 * 1000
           : 0;
-
       const finalUtcMs = bdWallUtcMs + jitterOffsetMs;
       if (finalUtcMs >= minAllowedUtcMs) {
         results.push(new Date(finalUtcMs));
@@ -56,7 +50,6 @@ export function computeUpcomingBdSlots(
     }
     dayOffset += 1;
   }
-
   return results;
 }
 

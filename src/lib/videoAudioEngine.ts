@@ -20,13 +20,133 @@ function createNoiseBuffer(ctx: AudioContext, seconds = 2): AudioBuffer {
   return buffer;
 }
 
-function triggerSfx(
+/**
+ * 100% Copyright-Free Synthesized Sound Effects (Web Audio API)
+ */
+export function triggerSfx(
   ctx: AudioContext,
   target: AudioNode,
   sfx: VideoSfx,
   startTime: number
 ) {
   if (sfx === 'none') return;
+
+  if (sfx === 'knock_door') {
+    // 4 crisp hollow wooden door knocks
+    [0, 0.22, 0.44, 0.72].forEach((offset) => {
+      const t = startTime + offset;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(165, t);
+      osc.frequency.exponentialRampToValueAtTime(58, t + 0.07);
+      gain.gain.setValueAtTime(0.001, t);
+      gain.gain.linearRampToValueAtTime(0.42, t + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+      osc.connect(gain).connect(target);
+      osc.start(t);
+      osc.stop(t + 0.1);
+    });
+    return;
+  }
+
+  if (sfx === 'dramatic_boom') {
+    // Copyright-free deep cinematic bass impact + metallic sting
+    const sub = ctx.createOscillator();
+    const subGain = ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(125, startTime);
+    sub.frequency.exponentialRampToValueAtTime(34, startTime + 0.85);
+    subGain.gain.setValueAtTime(0.001, startTime);
+    subGain.gain.linearRampToValueAtTime(0.48, startTime + 0.02);
+    subGain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.95);
+    sub.connect(subGain).connect(target);
+    sub.start(startTime);
+    sub.stop(startTime + 1.0);
+
+    const brass = ctx.createOscillator();
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(950, startTime);
+    lp.frequency.exponentialRampToValueAtTime(180, startTime + 0.9);
+    const bGain = ctx.createGain();
+    brass.type = 'sawtooth';
+    brass.frequency.setValueAtTime(110, startTime);
+    bGain.gain.setValueAtTime(0.001, startTime);
+    bGain.gain.linearRampToValueAtTime(0.2, startTime + 0.04);
+    bGain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.95);
+    brass.connect(lp).connect(bGain).connect(target);
+    brass.start(startTime);
+    brass.stop(startTime + 1.0);
+    return;
+  }
+
+  if (sfx === 'scream_sting') {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(240, startTime);
+    osc.frequency.exponentialRampToValueAtTime(860, startTime + 0.35);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 1800;
+    gain.gain.setValueAtTime(0.001, startTime);
+    gain.gain.linearRampToValueAtTime(0.18, startTime + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.45);
+    osc.connect(lp).connect(gain).connect(target);
+    osc.start(startTime);
+    osc.stop(startTime + 0.48);
+    return;
+  }
+
+  if (sfx === 'door_creak') {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(290, startTime);
+    osc.frequency.linearRampToValueAtTime(420, startTime + 0.25);
+    osc.frequency.linearRampToValueAtTime(240, startTime + 0.52);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 650;
+    bp.Q.value = 4;
+    gain.gain.setValueAtTime(0.001, startTime);
+    gain.gain.linearRampToValueAtTime(0.16, startTime + 0.06);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.55);
+    osc.connect(bp).connect(gain).connect(target);
+    osc.start(startTime);
+    osc.stop(startTime + 0.58);
+    return;
+  }
+
+  if (sfx === 'splat_funny') {
+    const noise = ctx.createBufferSource();
+    noise.buffer = createNoiseBuffer(ctx, 0.5);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(620, startTime);
+    filter.frequency.exponentialRampToValueAtTime(160, startTime + 0.35);
+    filter.Q.value = 2.4;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.32, startTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.38);
+    noise.connect(filter).connect(gain).connect(target);
+    noise.start(startTime);
+    noise.stop(startTime + 0.4);
+
+    // Funny boing sting
+    const osc = ctx.createOscillator();
+    const oGain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(190, startTime + 0.15);
+    osc.frequency.exponentialRampToValueAtTime(520, startTime + 0.32);
+    oGain.gain.setValueAtTime(0.2, startTime + 0.15);
+    oGain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.45);
+    osc.connect(oGain).connect(target);
+    osc.start(startTime + 0.15);
+    osc.stop(startTime + 0.48);
+    return;
+  }
 
   if (sfx === 'pop') {
     const osc = ctx.createOscillator();
@@ -63,7 +183,6 @@ function triggerSfx(
   }
 
   if (sfx === 'gasp') {
-    // Dramatic Vine-style shock sting + gasp
     const sub = ctx.createOscillator();
     const subGain = ctx.createGain();
     sub.type = 'sine';
@@ -125,9 +244,7 @@ function triggerSfx(
   }
 
   if (sfx === 'punchline') {
-    // Rimshot Ba-dum-tss!
-    const hits = [0, 0.14];
-    hits.forEach((offset, idx) => {
+    [0, 0.14].forEach((offset, idx) => {
       const t = startTime + offset;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -188,12 +305,41 @@ function scheduleBackgroundMusic(
 ) {
   if (style === 'none') return;
 
+  if (style === 'cinematic_parody') {
+    // 100% original copyright-free heroic bass pulse + tension strings pattern
+    const tempo = 0.36;
+    const bassNotes = [98.0, 98.0, 116.54, 98.0, 130.81, 116.54, 98.0, 87.31];
+    const baseTime = ctx.currentTime + 0.05;
+    const remaining = Math.max(0, totalSec - startOffsetSec);
+    const steps = Math.floor(remaining / tempo);
+    for (let i = 0; i < steps; i++) {
+      const absTime = startOffsetSec + i * tempo;
+      const t = baseTime + (absTime - startOffsetSec);
+      const freq = bassNotes[i % bassNotes.length];
+      const osc = ctx.createOscillator();
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 420;
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.001, t);
+      gain.gain.linearRampToValueAtTime(0.08, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + tempo * 0.82);
+      osc.connect(lp).connect(gain).connect(musicTarget);
+      osc.start(t);
+      osc.stop(t + tempo * 0.88);
+    }
+    return;
+  }
+
   const tempo = style === 'dramatic' ? 0.34 : style === 'quirky' ? 0.25 : 0.28;
-  const scales: Record<Exclude<VideoMusicStyle, 'none'>, number[]> = {
+  const scales: Record<'comedy' | 'quirky' | 'dramatic', number[]> = {
     comedy: [261.63, 329.63, 392.0, 329.63, 293.66, 349.23, 392.0, 440.0],
     quirky: [293.66, 349.23, 440.0, 415.3, 349.23, 392.0, 493.88, 349.23],
     dramatic: [196.0, 233.08, 261.63, 233.08, 196.0, 185.0, 196.0, 146.83],
   };
+
   const notes = scales[style];
   const baseTime = ctx.currentTime + 0.05;
   const remaining = Math.max(0, totalSec - startOffsetSec);
@@ -203,13 +349,12 @@ function scheduleBackgroundMusic(
     const absTime = startOffsetSec + i * tempo;
     const t = baseTime + (absTime - startOffsetSec);
     const freq = notes[i % notes.length];
-
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = style === 'dramatic' ? 'triangle' : 'sine';
     osc.frequency.setValueAtTime(freq, t);
     gain.gain.setValueAtTime(0.001, t);
-    gain.gain.linearRampToValueAtTime(0.06, t + 0.02);
+    gain.gain.linearRampToValueAtTime(0.055, t + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.001, t + tempo * 0.78);
     osc.connect(gain).connect(musicTarget);
     osc.start(t);
@@ -217,7 +362,7 @@ function scheduleBackgroundMusic(
   }
 }
 
-async function decodeVoiceBuffer(
+async function decodeAudioDataUrl(
   ctx: AudioContext,
   dataUrl: string
 ): Promise<AudioBuffer | null> {
@@ -230,114 +375,117 @@ async function decodeVoiceBuffer(
   }
 }
 
-export function startVideoAudioSession(
+export async function startVideoAudioSession(
   script: VideoScript,
-  options?: {
-    outputToSpeakers?: boolean;
-    outputToStream?: boolean;
-    startOffsetSec?: number;
-  }
-): AudioSession {
+  startOffsetSec = 0,
+  muteSpeaker = false
+): Promise<AudioSession> {
   const AudioCtx =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const ctx = new AudioCtx();
   if (ctx.state === 'suspended') {
-    ctx.resume().catch(() => {});
+    await ctx.resume().catch(() => {});
   }
-
-  const master = ctx.createGain();
-  master.gain.value = 0.95;
-
-  const musicBus = ctx.createGain();
-  musicBus.gain.value = 0.55;
-  musicBus.connect(master);
-
-  const sfxBus = ctx.createGain();
-  sfxBus.gain.value = 0.65;
-  sfxBus.connect(master);
-
-  const voiceBus = ctx.createGain();
-  voiceBus.gain.value = 1.0;
-  voiceBus.connect(master);
 
   const dest = ctx.createMediaStreamDestination();
-  if (options?.outputToSpeakers !== false) {
-    master.connect(ctx.destination);
-  }
-  if (options?.outputToStream) {
-    master.connect(dest);
+  const masterGain = ctx.createGain();
+  masterGain.gain.value = 0.92;
+  masterGain.connect(dest);
+
+  if (!muteSpeaker) {
+    masterGain.connect(ctx.destination);
   }
 
-  const startOffsetSec = options?.startOffsetSec ?? 0;
+  const musicGain = ctx.createGain();
+  musicGain.gain.value = 0.55;
+  musicGain.connect(masterGain);
+
+  const sfxGain = ctx.createGain();
+  sfxGain.gain.value = 0.95;
+  sfxGain.connect(masterGain);
+
+  const voiceGain = ctx.createGain();
+  voiceGain.gain.value = 1.05;
+  voiceGain.connect(masterGain);
+
+  const totalSec = script.scenes.reduce((acc, s) => acc + Math.max(1.5, s.durationSec), 0);
+
+  scheduleBackgroundMusic(ctx, musicGain, script.musicStyle, totalSec, startOffsetSec);
+
   const baseTime = ctx.currentTime + 0.05;
-
-  // Schedule background music (automatically ducked when voices play)
-  scheduleBackgroundMusic(ctx, musicBus, script.musicStyle, script.totalDurationSec, startOffsetSec);
-
-  // Build scene start timestamps
-  const sceneStarts: number[] = [];
   let cursor = 0;
-  for (const scene of script.scenes) {
-    sceneStarts.push(cursor);
-    const sceneEnd = cursor + scene.durationSec;
-    if (sceneEnd > startOffsetSec) {
-      const sfxAt = Math.max(startOffsetSec, cursor + 0.08);
-      const when = baseTime + (sfxAt - startOffsetSec);
-      if (cursor >= startOffsetSec - 0.3) {
-        triggerSfx(ctx, sfxBus, scene.sfx, when);
-      }
+
+  for (let sIdx = 0; sIdx < script.scenes.length; sIdx++) {
+    const sc = script.scenes[sIdx];
+    const sceneStart = cursor;
+    const sceneDur = Math.max(1.5, sc.durationSec);
+    cursor += sceneDur;
+
+    if (sceneStart + 0.4 >= startOffsetSec) {
+      const when = baseTime + Math.max(0, sceneStart - startOffsetSec + 0.08);
+      triggerSfx(ctx, sfxGain, sc.sfx, when);
     }
-    cursor = sceneEnd;
-  }
 
-  // Schedule synthesized AI voiceover clips & duck BGM while talking
-  let stopped = false;
-  const voiceClips: VideoVoiceClip[] = script.voiceClips || [];
-
-  if (voiceClips.length > 0) {
-    voiceClips.forEach((clip) => {
-      const sceneStart = sceneStarts[clip.sceneIndex] ?? 0;
-      const absStart = sceneStart + clip.offsetInSceneSec;
-      const absEnd = absStart + clip.durationSec;
-      if (absEnd <= startOffsetSec) return;
-
-      // Duck music bus smoothly around speech
-      const duckStart = baseTime + Math.max(0, absStart - startOffsetSec);
-      const duckEnd = baseTime + Math.max(0.05, absEnd - startOffsetSec);
-      musicBus.gain.setTargetAtTime(0.22, duckStart, 0.05);
-      musicBus.gain.setTargetAtTime(0.58, duckEnd, 0.08);
-
-      decodeVoiceBuffer(ctx, clip.audioDataUrl).then((audioBuffer) => {
-        if (stopped || !audioBuffer || ctx.state === 'closed') return;
-        const src = ctx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.connect(voiceBus);
-
-        if (absStart >= startOffsetSec) {
-          src.start(baseTime + (absStart - startOffsetSec));
-        } else {
-          const skipOffset = startOffsetSec - absStart;
-          if (skipOffset < audioBuffer.duration) {
-            src.start(baseTime, skipOffset);
+    // Check custom uploaded/recorded audio per character first
+    for (let cIdx = 0; cIdx < sc.characters.length; cIdx++) {
+      const ch = sc.characters[cIdx];
+      if (ch.customAudioDataUrl) {
+        const buf = await decodeAudioDataUrl(ctx, ch.customAudioDataUrl);
+        if (buf) {
+          const offsetInScene = cIdx === 0 ? 0.2 : Math.min(sceneDur * 0.45, 2.0);
+          const absStart = sceneStart + offsetInScene;
+          if (absStart + buf.duration > startOffsetSec) {
+            const src = ctx.createBufferSource();
+            src.buffer = buf;
+            src.connect(voiceGain);
+            const delay = Math.max(0, absStart - startOffsetSec);
+            const trimStart = Math.max(0, startOffsetSec - absStart);
+            src.start(baseTime + delay, trimStart);
           }
         }
-      });
-    });
+      }
+    }
   }
 
+  // Schedule AI synthesized voiceClips (skip if character has customAudioDataUrl override)
+  const clips: VideoVoiceClip[] = Array.isArray(script.voiceClips) ? script.voiceClips : [];
+  if (clips.length > 0) {
+    let sceneOffsets: number[] = [];
+    let acc = 0;
+    for (const sc of script.scenes) {
+      sceneOffsets.push(acc);
+      acc += Math.max(1.5, sc.durationSec);
+    }
+
+    for (const clip of clips) {
+      const sc = script.scenes[clip.sceneIndex];
+      const ch = sc?.characters?.[clip.charIndex];
+      if (ch?.customAudioDataUrl) continue;
+
+      const sStart = sceneOffsets[clip.sceneIndex] ?? 0;
+      const absStart = sStart + (clip.offsetInSceneSec ?? 0.2);
+      const buf = await decodeAudioDataUrl(ctx, clip.audioDataUrl);
+      if (!buf) continue;
+
+      if (absStart + buf.duration > startOffsetSec) {
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(voiceGain);
+        const delay = Math.max(0, absStart - startOffsetSec);
+        const trimStart = Math.max(0, startOffsetSec - absStart);
+        src.start(baseTime + delay, trimStart);
+      }
+    }
+  }
+
+  let stopped = false;
   return {
     stream: dest.stream,
     stop: () => {
+      if (stopped) return;
       stopped = true;
-      try {
-        master.disconnect();
-        if (ctx.state !== 'closed') {
-          ctx.close().catch(() => {});
-        }
-      } catch {
-        // Ignore teardown errors
-      }
+      ctx.close().catch(() => {});
     },
   };
 }

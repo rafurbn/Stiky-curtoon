@@ -68,7 +68,14 @@ export interface ComicPanel {
   panelIndex: number;
   captionTop?: string;
   sceneProp: PropType;
-  moodFx?: 'none' | 'sweat' | 'anger_vein' | 'sparkles' | 'question' | 'exclamation' | 'lightbulb';
+  moodFx?:
+    | 'none'
+    | 'sweat'
+    | 'anger_vein'
+    | 'sparkles'
+    | 'question'
+    | 'exclamation'
+    | 'lightbulb';
   characters: ComicCharacter[];
 }
 
@@ -130,7 +137,13 @@ export interface PublishLogEntry {
   timestamp: string;
 }
 
+export type VideoRenderStyle = 'stick_meme' | 'cartoon_2d';
+
 export type VideoTheme =
+  | 'bathroom_rush'
+  | 'room_door'
+  | 'bedroom_night'
+  | 'exam_hall'
   | 'rain_storm'
   | 'desert_sun'
   | 'office_drama'
@@ -158,10 +171,20 @@ export type VideoAction =
   | 'hands_up'
   | 'pour_water'
   | 'sip_tea'
-  | 'run';
+  | 'run'
+  | 'knock_door'
+  | 'desperate_squeeze'
+  | 'scream_jaw'
+  | 'door_peek'
+  | 'collapsed_mess'
+  | 'dramatic_closeup';
 
 export type VideoProp =
   | 'none'
+  | 'door_closed'
+  | 'door_open'
+  | 'toilet_squat'
+  | 'splat_mess'
   | 'umbrella_normal'
   | 'umbrella_upside_down'
   | 'broken_umbrella'
@@ -174,6 +197,11 @@ export type VideoProp =
 
 export type VideoSfx =
   | 'none'
+  | 'knock_door'
+  | 'dramatic_boom'
+  | 'scream_sting'
+  | 'door_creak'
+  | 'splat_funny'
   | 'laugh'
   | 'gasp'
   | 'thunder'
@@ -182,13 +210,24 @@ export type VideoSfx =
   | 'pop'
   | 'sad_trombone';
 
-export type VideoMusicStyle = 'comedy' | 'quirky' | 'dramatic' | 'none';
+export type VideoMusicStyle =
+  | 'comedy'
+  | 'quirky'
+  | 'dramatic'
+  | 'cinematic_parody'
+  | 'none';
 
 export type VideoVoiceEngine = 'auto' | 'edge_tts' | 'gemini_tts' | 'none';
 
+export type VoiceEffectPreset =
+  | 'normal'
+  | 'panicked'
+  | 'dramatic_boss'
+  | 'cartoon_high';
+
 export type VideoStoryArc = 'quick_short' | 'viral_story';
 
-export type VideoSubtitleStyle = 'reels_bold' | 'comic_bubble';
+export type VideoSubtitleStyle = 'reels_bold' | 'comic_bubble' | 'meme_clean';
 
 export interface VideoVoiceClip {
   sceneIndex: number;
@@ -199,7 +238,7 @@ export interface VideoVoiceClip {
   audioDataUrl: string;
   durationSec: number;
   offsetInSceneSec: number;
-  provider: 'edge_tts' | 'gemini_tts';
+  provider: 'edge_tts' | 'gemini_tts' | 'custom_upload';
 }
 
 export interface VideoCharacterState {
@@ -210,6 +249,8 @@ export interface VideoCharacterState {
   action: VideoAction;
   prop: VideoProp;
   speech?: string;
+  voiceEffect?: VoiceEffectPreset;
+  customAudioDataUrl?: string;
 }
 
 export interface VideoScene {
@@ -219,13 +260,16 @@ export interface VideoScene {
   camera: VideoCamera;
   sfx: VideoSfx;
   captionTop?: string;
+  splitScreen?: boolean;
   characters: VideoCharacterState[];
 }
 
 export interface VideoScript {
   id: string;
   title: string;
+  hookBanner?: string;
   category: string;
+  renderStyle?: VideoRenderStyle;
   aspectRatio: VideoAspectRatio;
   musicStyle: VideoMusicStyle;
   totalDurationSec: number;
@@ -245,4 +289,19 @@ export interface VideoItem extends VideoScript {
   publishedAt?: string;
   fbPostId?: string;
   errorMessage?: string;
+}
+
+export interface SavedRenderedVideo {
+  id: string;
+  videoId: string;
+  title: string;
+  category: string;
+  renderStyle: VideoRenderStyle;
+  aspectRatio: VideoAspectRatio;
+  durationSec: number;
+  sizeBytes: number;
+  mimeType: string;
+  createdAt: string;
+  fbCaption?: string;
+  serverUrl?: string;
 }

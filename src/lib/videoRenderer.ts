@@ -1,52 +1,21 @@
 import type {
   BrandingConfig,
   CharacterId,
+  VideoAction,
   VideoAspectRatio,
   VideoCharacterState,
   VideoProp,
   VideoScene,
   VideoScript,
   VideoTheme,
-  VideoVoiceClip,
 } from '../types/comic';
 import { startVideoAudioSession } from './videoAudioEngine';
 
-const THEME_IMAGE_URLS: Record<VideoTheme, string> = {
-  rain_storm: '/src/assets/images/bg_rain_storm_1795593943423.jpg',
-  desert_sun: '/src/assets/images/bg_desert_sun_1795593944376.jpg',
-  office_drama: '/src/assets/images/bg_office_drama_1795593941381.jpg',
-  tea_stall: '/src/assets/images/bg_tea_stall_1795593941870.jpg',
-  street_night: '/src/assets/images/bg_street_night_1795593944503.jpg',
-};
-
-const bgImageCache = new Map<VideoTheme, HTMLImageElement>();
-
-export function preloadThemeBackgrounds(): Promise<void> {
-  const entries = Object.entries(THEME_IMAGE_URLS) as Array<[VideoTheme, string]>;
-  return Promise.all(
-    entries.map(
-      ([theme, src]) =>
-        new Promise<void>((resolve) => {
-          const existing = bgImageCache.get(theme);
-          if (existing && existing.complete && existing.naturalWidth > 0) {
-            resolve();
-            return;
-          }
-          const img = new Image();
-          img.onload = () => {
-            bgImageCache.set(theme, img);
-            resolve();
-          };
-          img.onerror = () => resolve();
-          img.src = src;
-        })
-    )
-  ).then(() => undefined);
-}
-
-// Kick off background preloading immediately in browser
-if (typeof window !== 'undefined') {
-  preloadThemeBackgrounds().catch(() => {});
+export interface RenderedVideoResult {
+  blob: Blob;
+  mimeType: string;
+  extension: 'mp4' | 'webm';
+  durationSec: number;
 }
 
 export function getVideoDimensions(aspectRatio: VideoAspectRatio): {
@@ -54,9 +23,13 @@ export function getVideoDimensions(aspectRatio: VideoAspectRatio): {
   height: number;
 } {
   if (aspectRatio === '1:1') {
-    return { width: 900, height: 900 };
+    return { width: 720, height: 720 };
   }
   return { width: 720, height: 1280 };
+}
+
+export function preloadThemeBackgrounds(): Promise<void> {
+  return Promise.resolve();
 }
 
 function easeInOutCubic(x: number): number {
@@ -76,11 +49,838 @@ function drawRoundedRect(
   ctx.roundRect(x, y, w, h, r);
 }
 
-function drawFallbackGradient(
+function wrapTextLines(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string[] {
+  const words = text.trim().split(/\s+/);
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    const test = cur ? `${cur} ${w}` : w;
+    if (ctx.measureText(test).width > maxWidth && cur) {
+      lines.push(cur);
+      cur = w;
+    } else {
+      cur = test;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+export function getSceneAtTime(
+  script: VideoScript,
+  elapsedSec: number
+): {
+  scene: VideoScene;
+  sceneIndex: number;
+  localT: number;
+  totalDurationSec: number;
+} {
+  const scenes = script.scenes.length > 0 ? script.scenes : [];
+  const totalDurationSec = scenes.reduce(
+    (sum, s) => sum + Math.max(1.5, s.durationSec),
+    0
+  );
+  if (scenes.length === 0) {
+    return {
+      scene: {
+        sceneIndex: 0,
+        durationSec: 4,
+        theme: 'room_door',
+        camera: 'wide',
+        sfx: 'none',
+        characters: [],
+      },
+      sceneIndex: 0,
+      localT: 0,
+      totalDurationSec: 4,
+    };
+  }
+
+  const clamped = Math.max(0, Math.min(elapsedSec, Math.max(0.01, totalDurationSec - 0.001)));
+  let acc = 0;
+  for (let i = 0; i < scenes.length; i++) {
+    const dur = Math.max(1.5, scenes[i].durationSec);
+    if (clamped < acc + dur || i === scenes.length - 1) {
+      return {
+        scene: scenes[i],
+        sceneIndex: i,
+        localT: clamped - acc,
+        totalDurationSec,
+      };
+    }
+    acc += dur;
+  }
+
+  return {
+    scene: scenes[0],
+    sceneIndex: 0,
+    localT: 0,
+    totalDurationSec,
+  };
+}
+
+function getActiveSpeakerInScene(
+  script: VideoScript,
+  sceneIndex: number,
+  localT: number,
+  scene: VideoScene
+): { charIndex: number; speech: string } | null {
+  const clips = Array.isArray(script.voiceClips)
+    ? script.voiceClips.filter((c) => c.sceneIndex === sceneIndex)
+    : [];
+
+  if (clips.length > 0) {
+    for (const clip of clips) {
+      const start = clip.offsetInSceneSec ?? 0.2;
+      const end = start + Math.max(0.8, clip.durationSec);
+      if (localT >= start && localT <= end + 0.15) {
+        return { charIndex: clip.charIndex, speech: clip.text };
+      }
+    }
+    // Outside active clip window, check if near any clip
+    const first = clips[0];
+    if (localT < (first.offsetInSceneSec ?? 0.2)) {
+      return { charIndex: first.charIndex, speech: first.text };
+    }
+    const last = clips[clips.length - 1];
+    return { charIndex: last.charIndex, speech: last.text };
+  }
+
+  const speakingChars = scene.characters
+    .map((c, idx) => ({ idx, speech: (c.speech || '').trim() }))
+    .filter((x) => x.speech.length > 0);
+
+  if (speakingChars.length === 0) return null;
+  if (speakingChars.length === 1) {
+    return { charIndex: speakingChars[0].idx, speech: speakingChars[0].speech };
+  }
+
+  const half = Math.max(1.5, scene.durationSec) / speakingChars.length;
+  const slot = Math.min(speakingChars.length - 1, Math.floor(localT / half));
+  return {
+    charIndex: speakingChars[slot].idx,
+    speech: speakingChars[slot].speech,
+  };
+}
+
+/* ============================================================================
+ * 1. STICK-FIGURE MEME RENDERER (White Background + Black Ink + Viral Meme Expressions)
+ * ========================================================================== */
+
+function drawStickRoomBackdrop(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
   theme: VideoTheme,
+  splitScreen: boolean,
+  groundY: number
+) {
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, w, h);
+
+  // Subtle paper texture specks
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.025)';
+  for (let i = 0; i < 65; i++) {
+    const px = ((i * 197) % w);
+    const py = ((i * 313) % h);
+    ctx.fillRect(px, py, 2, 2);
+  }
+
+  ctx.save();
+  ctx.strokeStyle = '#111827';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  if (splitScreen) {
+    // Vertical crisp divider for split-screen dual rooms
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(w / 2, 180);
+    ctx.lineTo(w / 2, h - 140);
+    ctx.stroke();
+
+    // Left room floor & corner
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(20, groundY);
+    ctx.lineTo(w / 2 - 14, groundY);
+    ctx.moveTo(w / 2 + 14, groundY);
+    ctx.lineTo(w - 20, groundY);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  // Minimalist room perspective walls
+  if (theme === 'bathroom_rush') {
+    const boxLeft = w * 0.16;
+    const boxRight = w * 0.84;
+    const boxTop = h * 0.22;
+    const boxBottom = groundY - 35;
+
+    ctx.lineWidth = 2.5;
+    ctx.strokeRect(boxLeft, boxTop, boxRight - boxLeft, boxBottom - boxTop);
+
+    // Corner ceiling perspective lines
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.08);
+    ctx.lineTo(boxLeft, boxTop);
+    ctx.moveTo(w, h * 0.08);
+    ctx.lineTo(boxRight, boxTop);
+    ctx.stroke();
+
+    // Raised tile platform
+    ctx.fillStyle = '#F8FAFC';
+    ctx.fillRect(boxLeft + 6, boxBottom - 26, boxRight - boxLeft - 12, 34);
+    ctx.strokeRect(boxLeft + 6, boxBottom - 26, boxRight - boxLeft - 12, 34);
+
+    // Wall tap on left wall
+    const tapX = boxLeft + 46;
+    const tapY = boxBottom - 165;
+    ctx.beginPath();
+    ctx.moveTo(tapX - 24, tapY);
+    ctx.lineTo(tapX + 8, tapY);
+    ctx.arc(tapX + 8, tapY + 12, 12, -Math.PI / 2, Math.PI / 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(tapX - 8, tapY - 12, 7, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (theme === 'room_door') {
+    // Hallway wall and floor perspective
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(0, groundY - 260);
+    ctx.lineTo(w * 0.24, groundY - 340);
+    ctx.lineTo(w, groundY - 340);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(0, groundY + 30);
+    ctx.lineTo(w * 0.24, groundY - 30);
+    ctx.lineTo(w, groundY - 30);
+    ctx.stroke();
+  } else {
+    // Clean minimalist horizon ground line
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(28, groundY);
+    ctx.lineTo(w - 28, groundY);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function drawStickProp(
+  ctx: CanvasRenderingContext2D,
+  prop: VideoProp,
+  x: number,
+  groundY: number,
+  t: number,
+  isKnocking: boolean
+) {
+  if (prop === 'none') return;
+  ctx.save();
+  ctx.strokeStyle = '#111827';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  if (prop === 'door_closed') {
+    const shake = isKnocking ? Math.sin(t * 48) * 3 : 0;
+    const dw = 185;
+    const dh = 410;
+    const dx = x - dw / 2 + shake;
+    const dy = groundY - dh;
+
+    ctx.lineWidth = 4;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(dx, dy, dw, dh);
+    ctx.strokeRect(dx, dy, dw, dh);
+
+    // Door handle
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(dx + dw - 30, dy + dh * 0.52, 9, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(dx + dw - 30, dy + dh * 0.52);
+    ctx.lineTo(dx + dw - 46, dy + dh * 0.52);
+    ctx.stroke();
+
+    // Knock vibration lines when knocking
+    if (isKnocking) {
+      ctx.lineWidth = 2.5;
+      const pulse = Math.abs(Math.sin(t * 14));
+      if (pulse > 0.35) {
+        const kx = dx + 38;
+        const ky = dy + dh * 0.38;
+        for (let a = -1; a <= 1; a++) {
+          ctx.beginPath();
+          ctx.moveTo(kx + 18, ky + a * 16);
+          ctx.lineTo(kx + 38, ky + a * 26);
+          ctx.stroke();
+        }
+      }
+    }
+  } else if (prop === 'door_open') {
+    const dw = 175;
+    const dh = 390;
+    const frameX = x - dw / 2;
+    const frameY = groundY - dh;
+
+    // Doorway black/white frame
+    ctx.lineWidth = 3.5;
+    ctx.fillStyle = '#F8FAFC';
+    ctx.fillRect(frameX, frameY, dw, dh);
+    ctx.strokeRect(frameX, frameY, dw, dh);
+
+    // Swung-open door panel angled left
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.moveTo(frameX, frameY);
+    ctx.lineTo(frameX - 115, frameY + 26);
+    ctx.lineTo(frameX - 115, frameY + dh + 22);
+    ctx.lineTo(frameX, frameY + dh);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Handle on swung door
+    ctx.beginPath();
+    ctx.arc(frameX - 92, frameY + dh * 0.53, 8, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (prop === 'toilet_squat') {
+    ctx.lineWidth = 3.5;
+    ctx.fillStyle = '#FFFFFF';
+    drawRoundedRect(ctx, x - 58, groundY - 38, 116, 36, 12);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(x, groundY - 22, 34, 10, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (prop === 'splat_mess') {
+    // Classic comic black ink splat around floor
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.ellipse(x - 18, groundY - 4, 48, 13, 0.08, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x - 62, groundY - 12, 8, 0, Math.PI * 2);
+    ctx.arc(x + 36, groundY - 9, 6, 0, Math.PI * 2);
+    ctx.arc(x - 42, groundY - 24, 5, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (prop === 'tea_cup') {
+    ctx.lineWidth = 3;
+    ctx.fillRect(x - 16, groundY - 118, 30, 26);
+    ctx.strokeRect(x - 16, groundY - 118, 30, 26);
+    ctx.beginPath();
+    ctx.arc(x + 14, groundY - 105, 8, -Math.PI / 2, Math.PI / 2);
+    ctx.stroke();
+  } else if (prop === 'smartphone') {
+    ctx.lineWidth = 3;
+    drawRoundedRect(ctx, x - 14, groundY - 145, 28, 46, 5);
+    ctx.fill();
+    ctx.stroke();
+  } else if (prop === 'money') {
+    ctx.lineWidth = 3;
+    ctx.fillRect(x - 24, groundY - 135, 48, 26);
+    ctx.strokeRect(x - 24, groundY - 135, 48, 26);
+    ctx.fillStyle = '#111827';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('৳', x, groundY - 122);
+  } else if (prop === 'clock') {
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(x, groundY - 190, 28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x, groundY - 190);
+    ctx.lineTo(x, groundY - 208);
+    ctx.moveTo(x, groundY - 190);
+    ctx.lineTo(x + 14, groundY - 190);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function drawStickMemeCharacter(
+  ctx: CanvasRenderingContext2D,
+  char: VideoCharacterState,
+  baseX: number,
+  groundY: number,
+  facing: 1 | -1,
+  globalT: number,
+  localT: number,
+  sceneDur: number,
+  isSpeaking: boolean,
+  scale = 1
+) {
+  ctx.save();
+  ctx.strokeStyle = '#111827';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  const action = char.action;
+
+  // Dramatic close-up fills center with intense face + speed lines
+  if (action === 'dramatic_closeup') {
+    const cx = baseX;
+    const cy = groundY - 250;
+
+    // Radial black ink speed-lines
+    ctx.save();
+    ctx.strokeStyle = 'rgba(17, 24, 39, 0.22)';
+    ctx.lineWidth = 2.5;
+    for (let i = 0; i < 24; i++) {
+      const ang = (i / 24) * Math.PI * 2 + Math.sin(globalT * 6) * 0.04;
+      const r1 = 175 + ((i * 23) % 35);
+      const r2 = 460;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
+      ctx.lineTo(cx + Math.cos(ang) * r2, cy + Math.sin(ang) * r2);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Big shoulders + stick neck
+    const shakeX = isSpeaking ? Math.sin(globalT * 28) * 3 : 0;
+    ctx.translate(cx + shakeX, cy);
+    ctx.lineWidth = 5;
+
+    ctx.beginPath();
+    ctx.moveTo(-88, 220);
+    ctx.quadraticCurveTo(-78, 120, -14, 108);
+    ctx.lineTo(14, 108);
+    ctx.quadraticCurveTo(78, 120, 88, 220);
+    ctx.stroke();
+
+    // Big intense bald head
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 96, 112, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Ears
+    ctx.beginPath();
+    ctx.arc(-96, 8, 16, Math.PI * 0.5, Math.PI * 1.5);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(96, 8, 16, -Math.PI * 0.5, Math.PI * 0.5);
+    ctx.stroke();
+
+    // Angry furrowed eyebrows
+    ctx.lineWidth = 5.5;
+    ctx.beginPath();
+    ctx.moveTo(-64, -44);
+    ctx.lineTo(-16, -24);
+    ctx.moveTo(64, -44);
+    ctx.lineTo(16, -24);
+    ctx.stroke();
+
+    // Intense glare eyes
+    ctx.lineWidth = 4;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.ellipse(-38, -14, 24, 18, 0, 0, Math.PI * 2);
+    ctx.ellipse(38, -14, 24, 18, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.arc(-34, -13, 6.5, 0, Math.PI * 2);
+    ctx.arc(34, -13, 6.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Nose wrinkle lines
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-8, 16);
+    ctx.quadraticCurveTo(0, 6, 8, 16);
+    ctx.stroke();
+
+    // Dramatic shouting mouth
+    const openAmt = isSpeaking ? 26 + Math.abs(Math.sin(globalT * 20)) * 22 : 10;
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.ellipse(0, 56, 40, openAmt, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (openAmt > 16) {
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(-26, 56 - openAmt + 3, 52, 7);
+    }
+
+    ctx.restore();
+    return;
+  }
+
+  let x = baseX;
+  let yOffset = 0;
+  let tilt = 0;
+
+  if (action === 'walk_in') {
+    const p = easeInOutCubic(Math.min(1, localT / Math.min(1.4, sceneDur * 0.5)));
+    x = baseX + facing * -180 * (1 - p);
+    yOffset = -Math.abs(Math.sin(localT * 10)) * 10 * (1 - p);
+  } else if (action === 'run') {
+    const p = Math.min(1, localT / Math.max(0.8, sceneDur));
+    x = baseX - facing * p * 160;
+    yOffset = -Math.abs(Math.sin(localT * 18)) * 15;
+    tilt = -facing * 0.14;
+  } else if (action === 'desperate_squeeze') {
+    x += Math.sin(globalT * 38) * 3.5;
+    yOffset = Math.abs(Math.sin(globalT * 18)) * 5;
+    tilt = facing * 0.08;
+  } else if (action === 'shocked_jump') {
+    const jumpP = Math.sin(Math.min(1, localT * 2.4) * Math.PI);
+    yOffset = -jumpP * 60;
+  } else if (action === 'laugh' || action === 'point_laugh') {
+    yOffset = -Math.abs(Math.sin(globalT * 12)) * 8;
+  }
+
+  ctx.translate(x, groundY + yOffset);
+  ctx.scale(scale, scale);
+  ctx.rotate(tilt);
+
+  // Collapsed sitting on floor pose
+  if (action === 'collapsed_mess') {
+    ctx.lineWidth = 4.5;
+    // Wide bent legs sitting on ground
+    ctx.beginPath();
+    ctx.moveTo(-16, -24);
+    ctx.lineTo(-44, -46);
+    ctx.lineTo(-32, -8);
+    ctx.moveTo(16, -24);
+    ctx.lineTo(44, -46);
+    ctx.lineTo(32, -8);
+    ctx.stroke();
+
+    // Big oval shoes
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.ellipse(-34, -6, 16, 8, -0.2, 0, Math.PI * 2);
+    ctx.ellipse(34, -6, 16, 8, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Round sitting torso
+    ctx.beginPath();
+    ctx.ellipse(0, -52, 26, 32, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Flailing/resting stick arms
+    ctx.beginPath();
+    ctx.moveTo(-22, -64);
+    ctx.lineTo(-50, -34);
+    ctx.moveTo(22, -64);
+    ctx.lineTo(50, -34);
+    ctx.stroke();
+
+    // Huge shocked round head
+    ctx.beginPath();
+    ctx.arc(0, -112, 42, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Giant popping cartoon eyes
+    ctx.beginPath();
+    ctx.arc(-15, -122, 16, 0, Math.PI * 2);
+    ctx.arc(15, -122, 16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.arc(-13, -122, 4.5, 0, Math.PI * 2);
+    ctx.arc(13, -122, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Wide open comical mouth
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.ellipse(0, -90, 22, 15, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.ellipse(0, -88, 16, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+    return;
+  }
+
+  // Standard stick figure legs & cartoon shoes
+  ctx.lineWidth = 4.5;
+  const walkSwing =
+    action === 'walk_in' || action === 'run'
+      ? Math.sin(globalT * 14) * 20
+      : 0;
+
+  if (action === 'desperate_squeeze') {
+    // Crossed/squeezed knees
+    ctx.beginPath();
+    ctx.moveTo(-10, -82);
+    ctx.lineTo(6, -42);
+    ctx.lineTo(-14, -10);
+    ctx.moveTo(10, -82);
+    ctx.lineTo(-6, -42);
+    ctx.lineTo(14, -10);
+    ctx.stroke();
+  } else if (action === 'scream_jaw' && char.prop === 'toilet_squat') {
+    // Squatting pose
+    ctx.beginPath();
+    ctx.moveTo(-14, -76);
+    ctx.lineTo(-48, -56);
+    ctx.lineTo(-34, -12);
+    ctx.moveTo(14, -76);
+    ctx.lineTo(48, -56);
+    ctx.lineTo(34, -12);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(-12, -88);
+    ctx.lineTo(-16 + walkSwing, -10);
+    ctx.moveTo(12, -88);
+    ctx.lineTo(16 - walkSwing, -10);
+    ctx.stroke();
+  }
+
+  // Cartoon rounded shoes
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.ellipse(-18 + walkSwing, -8, 16, 8, 0, 0, Math.PI * 2);
+  ctx.ellipse(20 - walkSwing, -8, 16, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Slim white/ink cartoon torso (classic @oianimation style oval stick body)
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.ellipse(0, -128, 22, 46, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Arms based on action
+  ctx.beginPath();
+  if (action === 'knock_door') {
+    const knockBump = Math.abs(Math.sin(globalT * 16)) * 22;
+    // Left hand behind back / hip
+    ctx.moveTo(-18, -158);
+    ctx.lineTo(-36, -120);
+    ctx.lineTo(-16, -98);
+    // Right fist knocking forward
+    ctx.moveTo(18, -158);
+    ctx.lineTo(48, -182);
+    ctx.lineTo(66 + knockBump, -206);
+    ctx.stroke();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(68 + knockBump, -208, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  } else if (action === 'desperate_squeeze') {
+    ctx.moveTo(-18, -156);
+    ctx.lineTo(-34, -110);
+    ctx.lineTo(-8, -94);
+    ctx.moveTo(18, -156);
+    ctx.lineTo(34, -110);
+    ctx.lineTo(8, -94);
+    ctx.stroke();
+  } else if (action === 'hands_up' || action === 'shocked_jump') {
+    ctx.moveTo(-18, -158);
+    ctx.lineTo(-48, -210);
+    ctx.moveTo(18, -158);
+    ctx.lineTo(48, -210);
+    ctx.stroke();
+  } else if (action === 'facepalm') {
+    ctx.moveTo(-18, -156);
+    ctx.lineTo(-40, -116);
+    ctx.moveTo(18, -156);
+    ctx.lineTo(36, -196);
+    ctx.lineTo(14, -226);
+    ctx.stroke();
+  } else if (action === 'point_laugh') {
+    ctx.moveTo(-18, -156);
+    ctx.lineTo(-42, -126);
+    ctx.moveTo(18, -156);
+    ctx.lineTo(68 * facing, -168);
+    ctx.stroke();
+  } else {
+    ctx.moveTo(-18, -156);
+    ctx.lineTo(-36, -112);
+    ctx.moveTo(18, -156);
+    ctx.lineTo(36, -112);
+    ctx.stroke();
+  }
+
+  // Head! Special elongated jaw for 'scream_jaw'
+  if (action === 'scream_jaw') {
+    const jawDrop = 34 + Math.abs(Math.sin(globalT * 18)) * 24;
+    ctx.save();
+    ctx.translate(0, -228);
+
+    // Tall screaming head outline
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.roundRect(-34, -68, 68, 92 + jawDrop, 32);
+    ctx.fill();
+    ctx.stroke();
+
+    // Popping panicked eyes at very top
+    ctx.beginPath();
+    ctx.arc(-14, -52, 13, 0, Math.PI * 2);
+    ctx.arc(14, -52, 13, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.arc(-12, -52, 4, 0, Math.PI * 2);
+    ctx.arc(12, -52, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Giant open screaming mouth with teeth row
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.ellipse(0, -4 + jawDrop * 0.3, 24, 24 + jawDrop * 0.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(-16, -24, 32, 7);
+    ctx.restore();
+    ctx.restore();
+    return;
+  }
+
+  // Normal expressive meme head
+  const headY = -216;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.ellipse(0, headY, 40, 44, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Ear
+  ctx.beginPath();
+  ctx.arc(-40 * facing, headY + 4, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Expressive Eyes
+  const eyeOffsetX = facing * 6;
+  const pop = action === 'eye_pop' || char.expression === 'shocked' ? 1.35 : 1;
+
+  if (char.expression === 'crying' || action === 'desperate_squeeze') {
+    // Tightly squeezed shut >< crying eyes + sweat drops
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.moveTo(-20 + eyeOffsetX, headY - 12);
+    ctx.lineTo(-8 + eyeOffsetX, headY - 6);
+    ctx.lineTo(-20 + eyeOffsetX, headY);
+    ctx.moveTo(20 + eyeOffsetX, headY - 12);
+    ctx.lineTo(8 + eyeOffsetX, headY - 6);
+    ctx.lineTo(20 + eyeOffsetX, headY);
+    ctx.stroke();
+
+    // Sweat drop
+    ctx.fillStyle = '#FFFFFF';
+    ctx.lineWidth = 2.5;
+    const dropY = headY - 26 + ((globalT * 24) % 14);
+    ctx.beginPath();
+    ctx.moveTo(32, dropY);
+    ctx.quadraticCurveTo(40, dropY + 12, 32, dropY + 14);
+    ctx.quadraticCurveTo(24, dropY + 12, 32, dropY);
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    ctx.lineWidth = 3.5;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(-13 + eyeOffsetX, headY - 8, 12 * pop, 0, Math.PI * 2);
+    ctx.arc(13 + eyeOffsetX, headY - 8, 12 * pop, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.arc(-11 + eyeOffsetX, headY - 8, 3.8, 0, Math.PI * 2);
+    ctx.arc(15 + eyeOffsetX, headY - 8, 3.8, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Eyebrows
+    ctx.beginPath();
+    if (char.expression === 'angry') {
+      ctx.moveTo(-26 + eyeOffsetX, headY - 24);
+      ctx.lineTo(-4 + eyeOffsetX, headY - 16);
+      ctx.moveTo(26 + eyeOffsetX, headY - 24);
+      ctx.lineTo(4 + eyeOffsetX, headY - 16);
+    } else if (char.expression === 'shocked' || char.expression === 'confused') {
+      ctx.moveTo(-22 + eyeOffsetX, headY - 26);
+      ctx.lineTo(-4 + eyeOffsetX, headY - 26);
+      ctx.moveTo(4 + eyeOffsetX, headY - 22);
+      ctx.lineTo(22 + eyeOffsetX, headY - 22);
+    }
+    ctx.stroke();
+  }
+
+  // Mouth animation when speaking or expressing
+  const talkOpen = isSpeaking ? 5 + Math.abs(Math.sin(globalT * 18)) * 10 : 0;
+  ctx.lineWidth = 3.2;
+  if (talkOpen > 2 || char.expression === 'laughing' || char.expression === 'shocked') {
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.ellipse(
+      eyeOffsetX,
+      headY + 20,
+      14,
+      Math.max(7, talkOpen || 11),
+      0,
+      0,
+      Math.PI * 2
+    );
+    ctx.fill();
+  } else if (char.expression === 'crying' || char.expression === 'angry') {
+    ctx.beginPath();
+    ctx.arc(eyeOffsetX, headY + 28, 13, Math.PI * 1.15, Math.PI * 1.85);
+    ctx.stroke();
+  } else if (char.expression === 'happy' || char.expression === 'smug') {
+    ctx.beginPath();
+    ctx.arc(eyeOffsetX, headY + 14, 13, Math.PI * 0.15, Math.PI * 0.85);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(-11 + eyeOffsetX, headY + 20);
+    ctx.lineTo(11 + eyeOffsetX, headY + 20);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+/* ============================================================================
+ * 2. 2D COLORED CARTOON RENDERER (Procedural Vibrant Backdrops + Colored Characters)
+ * ========================================================================== */
+
+function drawColoredCartoonBackground(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  theme: VideoTheme,
+  globalT: number,
   groundY: number
 ) {
   const grad = ctx.createLinearGradient(0, 0, 0, groundY);
@@ -97,1146 +897,462 @@ function drawFallbackGradient(
     grad.addColorStop(0, '#431407');
     grad.addColorStop(1, '#D97706');
   } else {
-    grad.addColorStop(0, '#090D16');
-    grad.addColorStop(1, '#1E1B4B');
+    grad.addColorStop(0, '#0F172A');
+    grad.addColorStop(1, '#1E293B');
   }
+
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, groundY);
+
   ctx.fillStyle = '#1E293B';
   ctx.fillRect(0, groundY, w, h - groundY);
-}
 
-function drawThemeBackground(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-  theme: VideoTheme,
-  globalT: number,
-  localT: number,
-  groundY: number
-) {
-  const img = bgImageCache.get(theme);
-  if (img && img.complete && img.naturalWidth > 0) {
-    // Cover-crop onto canvas
-    const imgRatio = img.naturalWidth / img.naturalHeight;
-    const canvasRatio = w / h;
-    let drawW = w;
-    let drawH = h;
-    let offsetX = 0;
-    let offsetY = 0;
-
-    if (imgRatio > canvasRatio) {
-      drawH = h;
-      drawW = h * imgRatio;
-      offsetX = (w - drawW) / 2;
-    } else {
-      drawW = w;
-      drawH = w / imgRatio;
-      offsetY = (h - drawH) / 2;
-    }
-
-    // Subtle Ken Burns ambient drift so background feels alive
-    const kenScale = 1.03 + Math.sin(globalT * 0.5) * 0.025;
-    ctx.save();
-    ctx.translate(w / 2, h / 2);
-    ctx.scale(kenScale, kenScale);
-    ctx.translate(-w / 2, -h / 2);
-    ctx.drawImage(img, offsetX, offsetY, drawW, drawH);
-    ctx.restore();
-
-    // Subtle ground stage vignette so characters stand out clearly
-    const stageGrad = ctx.createLinearGradient(0, groundY - 220, 0, h);
-    stageGrad.addColorStop(0, 'rgba(15, 23, 42, 0)');
-    stageGrad.addColorStop(0.55, 'rgba(15, 23, 42, 0.26)');
-    stageGrad.addColorStop(1, 'rgba(15, 23, 42, 0.72)');
-    ctx.fillStyle = stageGrad;
-    ctx.fillRect(0, groundY - 220, w, h - (groundY - 220));
-  } else {
-    drawFallbackGradient(ctx, w, h, theme, groundY);
-  }
-
-  // Animated atmospheric FX overlays
   if (theme === 'rain_storm') {
-    const flashPhase = localT % 2.1;
-    if (flashPhase > 0.45 && flashPhase < 0.6) {
-      ctx.fillStyle = 'rgba(241, 245, 249, 0.25)';
-      ctx.fillRect(0, 0, w, h);
-    }
     ctx.save();
-    ctx.strokeStyle = 'rgba(186, 230, 253, 0.58)';
-    ctx.lineWidth = 2.2;
-    ctx.lineCap = 'round';
-    for (let i = 0; i < 42; i++) {
-      const rx = ((i * 89 + Math.floor(globalT * 260)) % (w + 100)) - 50;
-      const ry = ((i * 137 + globalT * 960) % (groundY + 120)) - 60;
+    ctx.strokeStyle = 'rgba(186, 230, 253, 0.55)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 48; i++) {
+      const rx = ((i * 83 + globalT * 190) % (w + 80)) - 40;
+      const ry = ((i * 117 + globalT * 740) % (groundY + 40)) - 20;
       ctx.beginPath();
       ctx.moveTo(rx, ry);
-      ctx.lineTo(rx - 12, ry + 34);
+      ctx.lineTo(rx - 8, ry + 24);
       ctx.stroke();
     }
     ctx.restore();
   } else if (theme === 'desert_sun') {
-    const heatAlpha = 0.07 + Math.sin(globalT * 5) * 0.03;
-    ctx.fillStyle = `rgba(251, 146, 60, ${heatAlpha})`;
-    ctx.fillRect(0, 0, w, h);
-  } else if (theme === 'street_night') {
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.16)';
-    ctx.fillRect(0, 0, w, h);
+    ctx.save();
+    ctx.fillStyle = '#FEF08A';
+    ctx.beginPath();
+    ctx.arc(w * 0.78, h * 0.22, 54, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  } else if (theme === 'tea_stall') {
+    ctx.save();
+    ctx.fillStyle = '#78350F';
+    ctx.fillRect(w * 0.08, groundY - 90, w * 0.84, 90);
+    ctx.fillStyle = '#92400E';
+    ctx.fillRect(w * 0.05, groundY - 106, w * 0.9, 20);
+    ctx.restore();
   }
 }
 
-interface CharacterAppearance {
-  skin: string;
-  shirt: string;
-  shirtShade: string;
-  pants: string;
-  shoe: string;
-  badgeColor: string;
-}
-
-function getCharacterAppearance(id: CharacterId): CharacterAppearance {
+function getCharacterAppearance(id: CharacterId) {
   switch (id) {
     case 'rafu':
-      return {
-        skin: '#FCD5B5',
-        shirt: '#FACC15',
-        shirtShade: '#EAB308',
-        pants: '#1E293B',
-        shoe: '#DC2626',
-        badgeColor: '#FACC15',
-      };
+      return { skin: '#FDBA74', shirt: '#2563EB', pants: '#1E293B' };
     case 'folk':
-      return {
-        skin: '#F8CAA5',
-        shirt: '#0EA5E9',
-        shirtShade: '#0284C7',
-        pants: '#334155',
-        shoe: '#0F172A',
-        badgeColor: '#38BDF8',
-      };
+      return { skin: '#FED7AA', shirt: '#16A34A', pants: '#0F172A' };
     case 'boss':
-      return {
-        skin: '#F5C6A5',
-        shirt: '#1E293B',
-        shirtShade: '#0F172A',
-        pants: '#0F172A',
-        shoe: '#020617',
-        badgeColor: '#F87171',
-      };
+      return { skin: '#FDE68A', shirt: '#334155', pants: '#0F172A' };
     case 'chacha':
-      return {
-        skin: '#E6B18A',
-        shirt: '#F8FAFC',
-        shirtShade: '#CBD5E1',
-        pants: '#0F766E',
-        shoe: '#78350F',
-        badgeColor: '#34D399',
-      };
-    case 'friend':
-      return {
-        skin: '#FCD5B5',
-        shirt: '#EC4899',
-        shirtShade: '#DB2777',
-        pants: '#1D4ED8',
-        shoe: '#F8FAFC',
-        badgeColor: '#F472B6',
-      };
+      return { skin: '#FDBA74', shirt: '#D97706', pants: '#334155' };
+    default:
+      return { skin: '#FCD5B5', shirt: '#DB2777', pants: '#1E293B' };
   }
 }
 
-function drawProp(
-  ctx: CanvasRenderingContext2D,
-  prop: VideoProp,
-  hx: number,
-  hy: number,
-  t: number
-) {
-  if (prop === 'none') return;
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-
-  if (prop === 'umbrella_normal') {
-    ctx.strokeStyle = '#1E293B';
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    ctx.moveTo(hx, hy);
-    ctx.lineTo(hx, hy - 145);
-    ctx.stroke();
-
-    ctx.fillStyle = '#EF4444';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.arc(hx, hy - 140, 86, Math.PI, 0);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  } else if (prop === 'umbrella_upside_down') {
-    ctx.strokeStyle = '#1E293B';
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    ctx.moveTo(hx, hy);
-    ctx.lineTo(hx, hy - 108);
-    ctx.stroke();
-
-    ctx.fillStyle = '#0284C7';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.arc(hx, hy - 110, 78, 0, Math.PI);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = '#7DD3FC';
-    ctx.beginPath();
-    ctx.ellipse(hx, hy - 108, 66, 11, 0, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (prop === 'broken_umbrella') {
-    ctx.strokeStyle = '#1E293B';
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.moveTo(hx, hy);
-    ctx.lineTo(hx - 14, hy - 125);
-    ctx.stroke();
-
-    ctx.strokeStyle = '#64748B';
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.moveTo(hx - 54, hy - 96);
-    ctx.lineTo(hx - 14, hy - 128);
-    ctx.lineTo(hx + 34, hy - 98);
-    ctx.stroke();
-  } else if (prop === 'water_tap_glass') {
-    ctx.fillStyle = '#E0F2FE';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(hx - 20, hy - 34);
-    ctx.lineTo(hx + 20, hy - 34);
-    ctx.lineTo(hx + 15, hy + 18);
-    ctx.lineTo(hx - 15, hy + 18);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = '#38BDF8';
-    ctx.fillRect(hx - 14, hy - 12, 28, 26);
-  } else if (prop === 'tea_cup') {
-    ctx.fillStyle = '#FFFFFF';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4;
-    ctx.fillRect(hx - 18, hy - 14, 34, 28);
-    ctx.strokeRect(hx - 18, hy - 14, 34, 28);
-
-    ctx.beginPath();
-    ctx.arc(hx + 18, hy, 8, -Math.PI / 2, Math.PI / 2);
-    ctx.stroke();
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-    ctx.lineWidth = 3;
-    const steamY = (t * 28) % 16;
-    ctx.beginPath();
-    ctx.moveTo(hx - 6, hy - 22 - steamY);
-    ctx.quadraticCurveTo(hx + 4, hy - 34 - steamY, hx - 4, hy - 44 - steamY);
-    ctx.stroke();
-  } else if (prop === 'smartphone') {
-    ctx.fillStyle = '#0F172A';
-    ctx.strokeStyle = '#38BDF8';
-    ctx.lineWidth = 3;
-    drawRoundedRect(ctx, hx - 14, hy - 26, 28, 46, 5);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#7DD3FC';
-    ctx.fillRect(hx - 10, hy - 20, 20, 32);
-  } else if (prop === 'money') {
-    ctx.fillStyle = '#22C55E';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3.5;
-    ctx.fillRect(hx - 24, hy - 14, 48, 28);
-    ctx.strokeRect(hx - 24, hy - 14, 48, 28);
-    ctx.fillStyle = '#0F172A';
-    ctx.font = 'bold 18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('৳', hx, hy + 1);
-  } else if (prop === 'laptop') {
-    ctx.fillStyle = '#334155';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4;
-    ctx.fillRect(hx - 32, hy - 34, 64, 42);
-    ctx.strokeRect(hx - 32, hy - 34, 64, 42);
-    ctx.fillStyle = '#93C5FD';
-    ctx.fillRect(hx - 26, hy - 28, 52, 30);
-    ctx.fillStyle = '#64748B';
-    ctx.fillRect(hx - 40, hy + 8, 80, 9);
-  } else if (prop === 'clock') {
-    ctx.fillStyle = '#FFFFFF';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(hx, hy - 18, 26, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(hx, hy - 18);
-    ctx.lineTo(hx, hy - 34);
-    ctx.moveTo(hx, hy - 18);
-    ctx.lineTo(hx + 12, hy - 18);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function drawLayeredCartoonCharacter(
+function drawColoredCartoonCharacter(
   ctx: CanvasRenderingContext2D,
   char: VideoCharacterState,
   baseX: number,
   groundY: number,
   facing: 1 | -1,
   globalT: number,
-  localT: number,
-  sceneDur: number,
   isSpeaking: boolean
 ) {
+  const look = getCharacterAppearance(char.id);
   ctx.save();
+  ctx.translate(baseX, groundY);
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 4;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  const look = getCharacterAppearance(char.id);
+  // Legs
+  ctx.fillStyle = look.pants;
+  ctx.fillRect(-20, -90, 16, 82);
+  ctx.strokeRect(-20, -90, 16, 82);
+  ctx.fillRect(4, -90, 16, 82);
+  ctx.strokeRect(4, -90, 16, 82);
 
-  let x = baseX;
-  let yOffset = 0;
-  let tilt = 0;
-  let breathe = Math.sin(globalT * 3.4 + baseX * 0.02) * 3;
-
-  if (char.action === 'walk_in') {
-    const p = easeInOutCubic(Math.min(1, localT / Math.min(1.4, sceneDur * 0.5)));
-    x = baseX + facing * -200 * (1 - p);
-    yOffset = -Math.abs(Math.sin(localT * 10)) * 12 * (1 - p);
-  } else if (char.action === 'run') {
-    const p = Math.min(1, localT / Math.max(0.8, sceneDur));
-    x = baseX - facing * p * 180;
-    yOffset = -Math.abs(Math.sin(localT * 18)) * 18;
-    tilt = -facing * 0.16;
-  } else if (char.action === 'shocked_jump') {
-    const jumpP = Math.sin(Math.min(1, localT * 2.4) * Math.PI);
-    yOffset = -jumpP * 68;
-  } else if (char.action === 'laugh' || char.action === 'point_laugh') {
-    yOffset = -Math.abs(Math.sin(globalT * 12)) * 9;
-    tilt = Math.sin(globalT * 10) * 0.04;
-  } else if (char.action === 'panting') {
-    breathe = Math.sin(globalT * 11) * 7;
-    tilt = facing * 0.09;
-  } else if (char.action === 'sip_tea') {
-    tilt = Math.sin(globalT * 2.5) * 0.03;
-  }
-
-  const hipY = groundY - 124 + yOffset + breathe * 0.35;
-  const shoulderY = hipY - 96;
-  const headY = shoulderY - 56;
-  const headR = 46;
-
-  // Ground drop shadow
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
-  ctx.beginPath();
-  ctx.ellipse(x, groundY + 4, 52, 13, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.translate(x, groundY);
-  ctx.rotate(tilt);
-  ctx.translate(-x, -groundY);
-
-  // Legs + shoes
-  const legStride =
-    char.action === 'run'
-      ? Math.sin(globalT * 22) * 32
-      : char.action === 'walk_in'
-        ? Math.sin(localT * 12) * 20
-        : 0;
-
-  ctx.strokeStyle = '#0F172A';
-  ctx.lineWidth = 14;
-  ctx.beginPath();
-  ctx.moveTo(x - 16, hipY);
-  ctx.lineTo(x - 24 - legStride, groundY - 8);
-  ctx.moveTo(x + 16, hipY);
-  ctx.lineTo(x + 24 + legStride, groundY - 8);
-  ctx.stroke();
-
-  ctx.strokeStyle = look.pants;
-  ctx.lineWidth = 9;
-  ctx.beginPath();
-  ctx.moveTo(x - 16, hipY);
-  ctx.lineTo(x - 24 - legStride, groundY - 8);
-  ctx.moveTo(x + 16, hipY);
-  ctx.lineTo(x + 24 + legStride, groundY - 8);
-  ctx.stroke();
-
-  // Shoes
-  ctx.fillStyle = look.shoe;
-  ctx.strokeStyle = '#0F172A';
-  ctx.lineWidth = 3.5;
-  [-1, 1].forEach((dir, idx) => {
-    const sx = x + dir * 24 + (idx === 0 ? -legStride : legStride);
-    ctx.beginPath();
-    ctx.ellipse(sx + facing * 6, groundY - 4, 17, 8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  });
-
-  // Layered Torso / Outfit
+  // Shirt torso
   ctx.fillStyle = look.shirt;
-  ctx.strokeStyle = '#0F172A';
-  ctx.lineWidth = 5;
-  ctx.beginPath();
-  ctx.moveTo(x - 32, shoulderY + 6);
-  ctx.quadraticCurveTo(x, shoulderY - 8, x + 32, shoulderY + 6);
-  ctx.lineTo(x + 38, hipY + 8);
-  ctx.quadraticCurveTo(x, hipY + 14, x - 38, hipY + 8);
-  ctx.closePath();
+  drawRoundedRect(ctx, -28, -172, 56, 86, 14);
   ctx.fill();
   ctx.stroke();
-
-  // Outfit shading & details
-  ctx.fillStyle = look.shirtShade;
-  ctx.beginPath();
-  ctx.moveTo(x + 6, shoulderY + 4);
-  ctx.lineTo(x + 30, shoulderY + 8);
-  ctx.lineTo(x + 35, hipY + 6);
-  ctx.lineTo(x + 10, hipY + 8);
-  ctx.closePath();
-  ctx.fill();
-
-  if (char.id === 'boss') {
-    // White shirt V-collar + red tie
-    ctx.fillStyle = '#FFFFFF';
-    ctx.beginPath();
-    ctx.moveTo(x - 12, shoulderY);
-    ctx.lineTo(x + 12, shoulderY);
-    ctx.lineTo(x, shoulderY + 34);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.fillStyle = '#EF4444';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(x - 5, shoulderY + 4);
-    ctx.lineTo(x + 5, shoulderY + 4);
-    ctx.lineTo(x + 7, shoulderY + 52);
-    ctx.lineTo(x, shoulderY + 64);
-    ctx.lineTo(x - 7, shoulderY + 52);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  } else if (char.id === 'chacha') {
-    // Traditional vest lines
-    ctx.fillStyle = '#334155';
-    ctx.fillRect(x - 24, shoulderY + 6, 16, 72);
-    ctx.fillRect(x + 8, shoulderY + 6, 16, 72);
-  }
-
-  // Arms + Hands
-  let leftHand = { x: x - 52, y: hipY - 12 };
-  let rightHand = { x: x + 52, y: hipY - 12 };
-
-  if (char.action === 'point_laugh') {
-    if (facing === 1) {
-      rightHand = { x: x + 84, y: shoulderY + 4 + Math.sin(globalT * 14) * 7 };
-      leftHand = { x: x - 38, y: hipY - 22 };
-    } else {
-      leftHand = { x: x - 84, y: shoulderY + 4 + Math.sin(globalT * 14) * 7 };
-      rightHand = { x: x + 38, y: hipY - 22 };
-    }
-  } else if (char.action === 'hands_up' || char.action === 'shocked_jump') {
-    leftHand = { x: x - 64, y: headY - 24 };
-    rightHand = { x: x + 64, y: headY - 24 };
-  } else if (char.action === 'facepalm') {
-    rightHand = { x: x + facing * 12, y: headY + 4 };
-    leftHand = { x: x - 48, y: hipY - 10 };
-  } else if (char.action === 'sip_tea') {
-    const sip = Math.sin(globalT * 3) * 14;
-    rightHand = { x: x + facing * 48, y: shoulderY - 14 + sip };
-  } else if (char.action === 'pour_water') {
-    rightHand = { x: x + facing * 64, y: shoulderY - 22 };
-    leftHand = { x: x - facing * 46, y: hipY - 16 };
-  } else if (char.action === 'run') {
-    leftHand = { x: x - 54 - legStride * 0.5, y: shoulderY + 34 };
-    rightHand = { x: x + 54 + legStride * 0.5, y: shoulderY + 34 };
-  } else if (char.prop !== 'none') {
-    if (facing === 1) {
-      rightHand = { x: x + 62, y: shoulderY + 18 };
-    } else {
-      leftHand = { x: x - 62, y: shoulderY + 18 };
-    }
-  }
-
-  // Draw arms with shirt sleeves + skin hands
-  [
-    { sx: x - 28, sy: shoulderY + 14, hx: leftHand.x, hy: leftHand.y },
-    { sx: x + 28, sy: shoulderY + 14, hx: rightHand.x, hy: rightHand.y },
-  ].forEach((arm) => {
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 13;
-    ctx.beginPath();
-    ctx.moveTo(arm.sx, arm.sy);
-    ctx.lineTo(arm.hx, arm.hy);
-    ctx.stroke();
-
-    ctx.strokeStyle = look.shirt;
-    ctx.lineWidth = 8;
-    ctx.beginPath();
-    ctx.moveTo(arm.sx, arm.sy);
-    ctx.lineTo((arm.sx + arm.hx) / 2, (arm.sy + arm.hy) / 2);
-    ctx.stroke();
-
-    ctx.strokeStyle = look.skin;
-    ctx.lineWidth = 7;
-    ctx.beginPath();
-    ctx.moveTo((arm.sx + arm.hx) / 2, (arm.sy + arm.hy) / 2);
-    ctx.lineTo(arm.hx, arm.hy);
-    ctx.stroke();
-
-    ctx.fillStyle = look.skin;
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(arm.hx, arm.hy, 9, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  });
-
-  // Props held in active hand
-  const activeHand = facing === 1 ? rightHand : leftHand;
-  drawProp(ctx, char.prop, activeHand.x, activeHand.y, globalT);
 
   // Head
   ctx.fillStyle = look.skin;
-  ctx.strokeStyle = '#0F172A';
-  ctx.lineWidth = 5;
   ctx.beginPath();
-  ctx.arc(x, headY, headR, 0, Math.PI * 2);
+  ctx.arc(0, -214, 38, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
 
-  // Character hair & accessories
-  if (char.id === 'rafu') {
-    ctx.fillStyle = '#0F172A';
-    ctx.beginPath();
-    ctx.moveTo(x - 36, headY - 22);
-    ctx.lineTo(x - 24, headY - 58);
-    ctx.lineTo(x - 6, headY - 40);
-    ctx.lineTo(x + 8, headY - 64);
-    ctx.lineTo(x + 22, headY - 40);
-    ctx.lineTo(x + 38, headY - 52);
-    ctx.lineTo(x + 36, headY - 20);
-    ctx.quadraticCurveTo(x, headY - 38, x - 36, headY - 22);
-    ctx.fill();
-  } else if (char.id === 'folk') {
-    // Neat hair + glasses
-    ctx.fillStyle = '#1E293B';
-    ctx.beginPath();
-    ctx.arc(x, headY - 12, headR - 2, Math.PI * 1.1, Math.PI * 1.9);
-    ctx.fill();
-  } else if (char.id === 'chacha') {
-    // Topi
-    ctx.fillStyle = '#FFFFFF';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4;
-    drawRoundedRect(ctx, x - 30, headY - headR - 12, 60, 22, 8);
-    ctx.fill();
-    ctx.stroke();
-  } else if (char.id === 'friend') {
-    // Baseball cap
-    ctx.fillStyle = '#DC2626';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(x, headY - 18, 42, Math.PI, 0);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x + facing * 12, headY - 18);
-    ctx.lineTo(x + facing * 58, headY - 12);
-    ctx.lineWidth = 7;
-    ctx.stroke();
-  }
-
-  // Facial Expressions + Blinking + Lip-sync!
-  const eyeY = headY - 6;
-  const eyeL = x - 16 + facing * 5;
-  const eyeR = x + 16 + facing * 5;
-  const blinkPhase = (globalT + baseX * 0.01) % 3.4;
-  const isBlinking = blinkPhase > 3.26 && char.expression !== 'shocked';
-
-  const isPopping =
-    char.action === 'eye_pop' || char.expression === 'shocked';
-  const eyeRSize = isPopping ? 13 : 8;
-
-  if (isBlinking || char.expression === 'laughing') {
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4;
-    [eyeL, eyeR].forEach((ex) => {
-      ctx.beginPath();
-      if (char.expression === 'laughing') {
-        ctx.arc(ex, eyeY + 3, 9, Math.PI * 1.1, Math.PI * 1.9);
-      } else {
-        ctx.moveTo(ex - 7, eyeY);
-        ctx.lineTo(ex + 7, eyeY);
-      }
-      ctx.stroke();
-    });
-  } else {
-    ctx.fillStyle = '#FFFFFF';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3;
-    [eyeL, eyeR].forEach((ex) => {
-      ctx.beginPath();
-      ctx.arc(ex, eyeY, eyeRSize, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.fillStyle = '#0F172A';
-      ctx.beginPath();
-      ctx.arc(ex + facing * 2.5, eyeY, isPopping ? 4.5 : 4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#FFFFFF';
-    });
-  }
-
-  // Glasses for Folk
-  if (char.id === 'folk') {
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3.5;
-    ctx.strokeRect(eyeL - 12, eyeY - 10, 24, 20);
-    ctx.strokeRect(eyeR - 12, eyeY - 10, 24, 20);
-    ctx.beginPath();
-    ctx.moveTo(eyeL + 12, eyeY);
-    ctx.lineTo(eyeR - 12, eyeY);
-    ctx.stroke();
-  }
-
-  // Eyebrows
-  ctx.strokeStyle = '#0F172A';
-  ctx.lineWidth = 4;
-  if (char.expression === 'angry') {
-    ctx.beginPath();
-    ctx.moveTo(eyeL - 10, eyeY - 16);
-    ctx.lineTo(eyeL + 8, eyeY - 10);
-    ctx.moveTo(eyeR + 10, eyeY - 16);
-    ctx.lineTo(eyeR - 8, eyeY - 10);
-    ctx.stroke();
-  } else if (char.expression === 'shocked' || char.expression === 'confused') {
-    ctx.beginPath();
-    ctx.arc(eyeL, eyeY - 17, 10, Math.PI * 1.15, Math.PI * 1.85);
-    ctx.arc(eyeR, eyeY - 17, 10, Math.PI * 1.15, Math.PI * 1.85);
-    ctx.stroke();
-  }
-
-  // Chacha mustache
-  if (char.id === 'chacha') {
-    ctx.fillStyle = '#E2E8F0';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.ellipse(x + facing * 4 - 8, headY + 12, 10, 5, -0.2, 0, Math.PI * 2);
-    ctx.ellipse(x + facing * 4 + 8, headY + 12, 10, 5, 0.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  // Real-time Lip-Sync Mouth!
-  const mouthX = x + facing * 4;
-  const mouthY = headY + 21;
-  if (isSpeaking) {
-    const openAmt = 4 + Math.abs(Math.sin(globalT * 24)) * 10;
-    ctx.fillStyle = '#991B1B';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3.5;
-    ctx.beginPath();
-    ctx.ellipse(mouthX, mouthY, 13, openAmt, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    // Tongue
-    ctx.fillStyle = '#F87171';
-    ctx.beginPath();
-    ctx.ellipse(mouthX, mouthY + openAmt * 0.35, 7, openAmt * 0.4, 0, 0, Math.PI);
-    ctx.fill();
-  } else if (char.expression === 'laughing' || char.expression === 'happy') {
-    ctx.fillStyle = '#991B1B';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3.5;
-    ctx.beginPath();
-    ctx.arc(mouthX, mouthY - 4, 15, 0, Math.PI);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  } else if (char.expression === 'shocked') {
-    ctx.fillStyle = '#991B1B';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3.5;
-    ctx.beginPath();
-    ctx.ellipse(mouthX, mouthY + 2, 10, 14, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  } else if (char.expression === 'angry' || char.expression === 'crying') {
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(mouthX, mouthY + 12, 13, Math.PI * 1.15, Math.PI * 1.85);
-    ctx.stroke();
-  } else {
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(mouthX - 11, mouthY);
-    ctx.lineTo(mouthX + 11, mouthY);
-    ctx.stroke();
-  }
-
-  // Sweat drops for exhausted / shocked
-  if (char.expression === 'exhausted' || char.expression === 'shocked') {
-    const dropY = (globalT * 28) % 16;
-    ctx.fillStyle = '#38BDF8';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(x - 36, headY - 18 + dropY, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  ctx.restore();
-}
-
-function wrapLines(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxW: number
-): string[] {
-  const words = text.trim().split(/\s+/);
-  const lines: string[] = [];
-  let line = '';
-  for (const w of words) {
-    const test = line ? `${line} ${w}` : w;
-    if (ctx.measureText(test).width > maxW && line) {
-      lines.push(line);
-      line = w;
-    } else {
-      line = test;
-    }
-  }
-  if (line) lines.push(line);
-  return lines.slice(0, 3);
-}
-
-function drawReelsSubtitle(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-  speakerName: string,
-  badgeColor: string,
-  text: string,
-  subtitleStyle: 'reels_bold' | 'comic_bubble'
-) {
-  if (!text.trim()) return;
-  ctx.save();
-
-  if (subtitleStyle === 'comic_bubble') {
-    ctx.font = '700 28px "Hind Siliguri", "Noto Sans Bengali", sans-serif';
-    const lines = wrapLines(ctx, text, w - 120);
-    const boxW = Math.min(w - 64, Math.max(240, ...lines.map((l) => ctx.measureText(l).width + 64)));
-    const boxH = lines.length * 36 + 40;
-    const bx = (w - boxW) / 2;
-    const by = 135;
-
-    ctx.fillStyle = '#FFFFFF';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 5;
-    drawRoundedRect(ctx, bx, by, boxW, boxH, 22);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = '#0F172A';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    lines.forEach((ln, i) => {
-      ctx.fillText(ln, w / 2, by + 34 + i * 36);
-    });
-    ctx.restore();
-    return;
-  }
-
-  // Modern Reels Bold Subtitle Card at lower-third
-  ctx.font = '700 32px "Hind Siliguri", "Noto Sans Bengali", sans-serif';
-  const lines = wrapLines(ctx, text, w - 100);
-  const boxW = w - 64;
-  const boxH = lines.length * 42 + 64;
-  const bx = 32;
-  const by = h - boxH - 58;
-
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
-  ctx.strokeStyle = badgeColor;
-  ctx.lineWidth = 3.5;
-  drawRoundedRect(ctx, bx, by, boxW, boxH, 18);
+  // Eyes
+  const ex = facing * 6;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.arc(-12 + ex, -220, 9, 0, Math.PI * 2);
+  ctx.arc(12 + ex, -220, 9, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
-
-  // Speaker pill tag on top edge of subtitle card
-  ctx.font = '700 20px "Hind Siliguri", "Noto Sans Bengali", sans-serif';
-  const nameW = Math.max(88, ctx.measureText(speakerName).width + 28);
-  ctx.fillStyle = badgeColor;
-  drawRoundedRect(ctx, bx + 20, by - 16, nameW, 30, 8);
-  ctx.fill();
-
   ctx.fillStyle = '#0F172A';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(speakerName, bx + 20 + nameW / 2, by - 1);
-
-  // Bold high-contrast Bangla caption lines
-  ctx.font = '700 32px "Hind Siliguri", "Noto Sans Bengali", sans-serif';
-  ctx.fillStyle = '#F8FAFC';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  lines.forEach((ln, i) => {
-    ctx.fillText(ln, w / 2, by + 44 + i * 42);
-  });
-
-  ctx.restore();
-}
-
-function drawVideoWatermark(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-  branding: BrandingConfig
-) {
-  const text = (branding.logoText || '@@RAFU FOLK@@').trim();
-  if (!text) return;
-  ctx.save();
-  ctx.globalAlpha = Math.max(0.25, Math.min(1, branding.logoOpacity));
-  ctx.font = '800 22px "Plus Jakarta Sans", "Hind Siliguri", sans-serif';
-  const tw = ctx.measureText(text).width + 28;
-  const padX = w - tw - 24;
-  const padY = 26;
-
-  ctx.fillStyle = '#0F172A';
-  ctx.strokeStyle = '#FACC15';
-  ctx.lineWidth = 2.5;
-  drawRoundedRect(ctx, padX, padY, tw, 38, 10);
+  ctx.beginPath();
+  ctx.arc(-10 + ex, -220, 3.5, 0, Math.PI * 2);
+  ctx.arc(14 + ex, -220, 3.5, 0, Math.PI * 2);
   ctx.fill();
-  ctx.stroke();
 
-  ctx.fillStyle = '#FACC15';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, padX + tw / 2, padY + 19);
+  // Mouth
+  const open = isSpeaking ? 4 + Math.abs(Math.sin(globalT * 18)) * 8 : 0;
+  ctx.fillStyle = '#0F172A';
+  if (open > 2) {
+    ctx.beginPath();
+    ctx.ellipse(ex, -196, 12, open, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.arc(ex, -200, 10, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.stroke();
+  }
+
   ctx.restore();
 }
 
-export function getSceneAtTime(
-  script: VideoScript,
-  timeSec: number
-): { scene: VideoScene; localT: number; sceneStart: number } {
-  let cursor = 0;
-  for (const sc of script.scenes) {
-    if (timeSec <= cursor + sc.durationSec) {
-      return { scene: sc, localT: Math.max(0, timeSec - cursor), sceneStart: cursor };
-    }
-    cursor += sc.durationSec;
-  }
-  const last = script.scenes[script.scenes.length - 1];
-  return {
-    scene: last,
-    localT: last ? last.durationSec : 0,
-    sceneStart: Math.max(0, cursor - (last?.durationSec || 0)),
-  };
-}
-
-function getActiveSpeakerAtTime(
-  script: VideoScript,
-  scene: VideoScene,
-  localT: number
-): { charIndex: number; text: string } {
-  const voiceClips: VideoVoiceClip[] = (script.voiceClips || []).filter(
-    (c) => c.sceneIndex === scene.sceneIndex
-  );
-  if (voiceClips.length > 0) {
-    const active = voiceClips.find(
-      (c) => localT >= c.offsetInSceneSec && localT <= c.offsetInSceneSec + c.durationSec + 0.15
-    );
-    if (active) {
-      return { charIndex: active.charIndex, text: active.text };
-    }
-    // Between clips: show latest clip up to localT
-    const past = voiceClips.filter((c) => localT >= c.offsetInSceneSec);
-    if (past.length > 0) {
-      const last = past[past.length - 1];
-      return { charIndex: -1, text: last.text };
-    }
-    return { charIndex: -1, text: '' };
-  }
-
-  // Fallback without voiceClips: alternate characters across scene duration
-  const speakers = scene.characters
-    .map((c, idx) => ({ idx, speech: (c.speech || '').trim() }))
-    .filter((s) => s.speech.length > 0);
-  if (speakers.length === 0) return { charIndex: -1, text: '' };
-
-  const slice = scene.durationSec / speakers.length;
-  const pickIdx = Math.min(speakers.length - 1, Math.floor(localT / Math.max(0.1, slice)));
-  return { charIndex: speakers[pickIdx].idx, text: speakers[pickIdx].speech };
-}
+/* ============================================================================
+ * 3. UNIFIED VIDEO FRAME RENDERER
+ * ========================================================================== */
 
 export function renderVideoFrame(
-  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
   script: VideoScript,
   branding: BrandingConfig,
-  timeSec: number
+  elapsedSec: number
 ) {
   const { width: w, height: h } = getVideoDimensions(script.aspectRatio);
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
-  }
+  const { scene, sceneIndex, localT } = getSceneAtTime(script, elapsedSec);
+  const renderStyle = script.renderStyle || 'stick_meme';
+  const isStick = renderStyle === 'stick_meme';
+  const groundY = Math.round(h * 0.72);
 
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-
-  const { scene, localT } = getSceneAtTime(script, timeSec);
-  if (!scene) return;
-
-  const groundY = Math.round(h * 0.74);
-
-  // Camera transform
-  ctx.save();
+  // Camera zoom / shake transforms
   let camScale = 1;
   let camFocusX = w / 2;
-  let camFocusY = h * 0.56;
+  let camFocusY = h / 2;
   let shakeX = 0;
   let shakeY = 0;
 
   if (scene.camera === 'zoom_left') {
-    camScale = 1 + 0.18 * easeInOutCubic(Math.min(1, localT / Math.max(0.8, scene.durationSec * 0.7)));
-    camFocusX = w * 0.34;
+    camScale = 1.18;
+    camFocusX = w * 0.3;
+    camFocusY = h * 0.56;
   } else if (scene.camera === 'zoom_right') {
-    camScale = 1 + 0.18 * easeInOutCubic(Math.min(1, localT / Math.max(0.8, scene.durationSec * 0.7)));
-    camFocusX = w * 0.66;
+    camScale = 1.18;
+    camFocusX = w * 0.7;
+    camFocusY = h * 0.56;
   } else if (scene.camera === 'zoom_center') {
-    camScale = 1 + 0.14 * easeInOutCubic(Math.min(1, localT / Math.max(0.8, scene.durationSec * 0.7)));
+    camScale = 1.14;
+    camFocusX = w * 0.5;
+    camFocusY = h * 0.54;
   } else if (scene.camera === 'shake') {
-    shakeX = Math.sin(timeSec * 44) * 9;
-    shakeY = Math.cos(timeSec * 38) * 6;
+    shakeX = Math.sin(elapsedSec * 42) * 8;
+    shakeY = Math.cos(elapsedSec * 36) * 6;
   }
 
+  ctx.save();
   ctx.translate(w / 2 + shakeX, h / 2 + shakeY);
   ctx.scale(camScale, camScale);
   ctx.translate(-camFocusX, -camFocusY);
 
-  drawThemeBackground(ctx, w, h, scene.theme, timeSec, localT, groundY);
-
-  const activeSpeaker = getActiveSpeakerAtTime(script, scene, localT);
-
-  // Draw layered cartoon characters
-  scene.characters.forEach((ch, idx) => {
-    const posX =
-      ch.side === 'left'
-        ? w * 0.3
-        : ch.side === 'right'
-          ? w * 0.7
-          : w * 0.5;
-    const facing: 1 | -1 = ch.side === 'right' ? -1 : 1;
-    const isSpeaking = activeSpeaker.charIndex === idx;
-    drawLayeredCartoonCharacter(
-      ctx,
-      ch,
-      posX,
-      groundY,
-      facing,
-      timeSec,
-      localT,
-      scene.durationSec,
-      isSpeaking
-    );
-  });
-
-  ctx.restore();
-
-  // Top-left Scene Caption Badge
-  if (scene.captionTop && scene.captionTop.trim()) {
-    ctx.save();
-    ctx.font = '700 22px "Hind Siliguri", "Noto Sans Bengali", sans-serif';
-    const capText = scene.captionTop.trim();
-    const tw = Math.min(w - 220, ctx.measureText(capText).width + 36);
-    ctx.fillStyle = 'rgba(250, 204, 21, 0.96)';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3;
-    drawRoundedRect(ctx, 24, 26, tw, 40, 10);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = '#0F172A';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(capText, 24 + tw / 2, 46);
-    ctx.restore();
-  }
-
-  // Reels Bold Subtitle or Comic Bubble
-  if (activeSpeaker.text) {
-    const speakingChar =
-      activeSpeaker.charIndex >= 0
-        ? scene.characters[activeSpeaker.charIndex]
-        : scene.characters.find((c) => c.speech === activeSpeaker.text) || scene.characters[0];
-    const badgeColor = speakingChar
-      ? getCharacterAppearance(speakingChar.id).badgeColor
-      : '#FACC15';
-    drawReelsSubtitle(
+  if (isStick) {
+    drawStickRoomBackdrop(
       ctx,
       w,
       h,
-      speakingChar?.name || '@@RAFU FOLK@@',
-      badgeColor,
-      activeSpeaker.text,
-      script.subtitleStyle || 'reels_bold'
+      scene.theme,
+      Boolean(scene.splitScreen),
+      groundY
     );
+  } else {
+    drawColoredCartoonBackground(ctx, w, h, scene.theme, elapsedSec, groundY);
   }
 
-  // Top Progress Bar
-  ctx.save();
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
-  ctx.fillRect(24, h - 18, w - 48, 5);
-  ctx.fillStyle = '#FACC15';
-  const progRatio = Math.min(1, timeSec / Math.max(0.1, script.totalDurationSec));
-  ctx.fillRect(24, h - 18, (w - 48) * progRatio, 5);
+  // Active speaker tracking
+  const activeSpeaker = getActiveSpeakerInScene(script, sceneIndex, localT, scene);
+
+  // Render scene props & characters
+  if (isStick) {
+    const isAnyKnocking = scene.characters.some((c) => c.action === 'knock_door');
+
+    // Draw background props (doors, toilet, splat) behind characters
+    scene.characters.forEach((char) => {
+      if (char.prop === 'none') return;
+      let px = w / 2;
+      if (scene.splitScreen) {
+        px = char.side === 'left' ? w * 0.25 : w * 0.75;
+      } else if (char.side === 'left') {
+        px = char.prop === 'door_closed' ? w * 0.44 : w * 0.28;
+      } else if (char.side === 'right') {
+        px = char.prop === 'door_open' ? w * 0.64 : w * 0.72;
+      } else if (char.prop === 'door_closed') {
+        px = w * 0.6;
+      }
+      drawStickProp(ctx, char.prop, px, groundY, elapsedSec, isAnyKnocking);
+    });
+
+    scene.characters.forEach((char, idx) => {
+      let cx = w * 0.5;
+      let facing: 1 | -1 = 1;
+      if (scene.splitScreen) {
+        cx = char.side === 'left' ? w * 0.25 : w * 0.75;
+        facing = char.side === 'left' ? 1 : -1;
+      } else if (scene.characters.length === 2) {
+        cx = char.side === 'left' ? w * 0.28 : w * 0.72;
+        facing = char.side === 'left' ? 1 : -1;
+      } else if (char.prop === 'door_closed') {
+        cx = w * 0.34;
+        facing = 1;
+      }
+
+      const isSpeaking = activeSpeaker?.charIndex === idx;
+      drawStickMemeCharacter(
+        ctx,
+        char,
+        cx,
+        groundY,
+        facing,
+        elapsedSec,
+        localT,
+        scene.durationSec,
+        isSpeaking,
+        scene.splitScreen ? 0.9 : 1.05
+      );
+    });
+  } else {
+    scene.characters.forEach((char, idx) => {
+      const cx =
+        scene.characters.length === 1
+          ? w * 0.5
+          : char.side === 'left'
+            ? w * 0.28
+            : w * 0.72;
+      const facing: 1 | -1 = char.side === 'right' ? -1 : 1;
+      const isSpeaking = activeSpeaker?.charIndex === idx;
+      drawColoredCartoonCharacter(ctx, char, cx, groundY, facing, elapsedSec, isSpeaking);
+    });
+  }
+
   ctx.restore();
 
-  drawVideoWatermark(ctx, w, h, branding);
-}
+  // Top Viral Hook Banner (Stick-Meme style: crisp white rounded box with black outline)
+  const hookText = (script.hookBanner || script.title || '').trim();
+  if (hookText) {
+    ctx.save();
+    ctx.font = '700 28px "Hind Siliguri", "Plus Jakarta Sans", sans-serif';
+    const boxW = Math.min(w - 56, Math.max(320, ctx.measureText(hookText).width + 64));
+    const boxH = 64;
+    const boxX = (w - boxW) / 2;
+    const boxY = 34;
 
-export interface RenderedVideoResult {
-  blob: Blob;
-  mimeType: string;
-  extension: 'mp4' | 'webm';
-  objectUrl: string;
-  durationSec: number;
-}
-
-function pickSupportedRecorderMime(): {
-  recorderMime: string;
-  baseMime: 'video/mp4' | 'video/webm';
-  extension: 'mp4' | 'webm';
-} {
-  const candidates: Array<{
-    recorderMime: string;
-    baseMime: 'video/mp4' | 'video/webm';
-    extension: 'mp4' | 'webm';
-  }> = [
-    { recorderMime: 'video/mp4;codecs=avc1,mp4a.40.2', baseMime: 'video/mp4', extension: 'mp4' },
-    { recorderMime: 'video/mp4', baseMime: 'video/mp4', extension: 'mp4' },
-    { recorderMime: 'video/webm;codecs=vp9,opus', baseMime: 'video/webm', extension: 'webm' },
-    { recorderMime: 'video/webm;codecs=vp8,opus', baseMime: 'video/webm', extension: 'webm' },
-    { recorderMime: 'video/webm', baseMime: 'video/webm', extension: 'webm' },
-  ];
-  for (const c of candidates) {
-    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c.recorderMime)) {
-      return c;
+    if (isStick) {
+      ctx.fillStyle = '#FFFFFF';
+      ctx.strokeStyle = '#111827';
+      ctx.lineWidth = 3;
+      drawRoundedRect(ctx, boxX, boxY, boxW, boxH, 14);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#111827';
+    } else {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      drawRoundedRect(ctx, boxX, boxY, boxW, boxH, 14);
+      ctx.fill();
+      ctx.fillStyle = '#FACC15';
     }
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(hookText, w / 2, boxY + boxH / 2 + 1);
+    ctx.restore();
   }
-  return { recorderMime: 'video/webm', baseMime: 'video/webm', extension: 'webm' };
+
+  // Subtle scene top label below hook
+  if (scene.captionTop) {
+    ctx.save();
+    ctx.font = '600 18px "Hind Siliguri", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = isStick ? 'rgba(17, 24, 39, 0.55)' : 'rgba(255, 255, 255, 0.75)';
+    ctx.fillText(scene.captionTop, w / 2, 124);
+    ctx.restore();
+  }
+
+  // Watermark / Brand stamp
+  const brandText = (branding.logoText || '@@RAFU FOLK@@').trim();
+  if (brandText) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0.2, Math.min(0.95, branding.logoOpacity ?? 0.45));
+    ctx.font = '700 22px "Plus Jakarta Sans", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = isStick ? '#64748B' : '#FFFFFF';
+    ctx.fillText(brandText, w / 2, groundY + 46);
+    ctx.restore();
+  }
+
+  // Bottom Subtitles
+  if (activeSpeaker && activeSpeaker.speech) {
+    ctx.save();
+    const subStyle = script.subtitleStyle || (isStick ? 'meme_clean' : 'reels_bold');
+    const speakingChar = scene.characters[activeSpeaker.charIndex];
+    const lineText = speakingChar
+      ? `${speakingChar.name}: ${activeSpeaker.speech}`
+      : activeSpeaker.speech;
+
+    ctx.font =
+      subStyle === 'meme_clean'
+        ? '600 25px "Hind Siliguri", "Plus Jakarta Sans", sans-serif'
+        : '700 27px "Hind Siliguri", "Plus Jakarta Sans", sans-serif';
+
+    const lines = wrapTextLines(ctx, lineText, w - 84).slice(0, 3);
+    const lineHeight = 36;
+    const totalTextH = lines.length * lineHeight;
+    const startY = h - 96 - totalTextH / 2;
+
+    if (subStyle === 'reels_bold') {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+      drawRoundedRect(ctx, 32, startY - 22, w - 64, totalTextH + 34, 16);
+      ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+    } else {
+      // Clean high-contrast meme subtitle (dark ink on white with subtle white halo)
+      ctx.fillStyle = isStick ? '#111827' : '#FFFFFF';
+      if (!isStick) {
+        ctx.strokeStyle = '#0F172A';
+        ctx.lineWidth = 5;
+      }
+    }
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    lines.forEach((ln, idx) => {
+      const ly = startY + idx * lineHeight;
+      if (subStyle !== 'reels_bold' && !isStick) {
+        ctx.strokeText(ln, w / 2, ly);
+      }
+      ctx.fillText(ln, w / 2, ly);
+    });
+    ctx.restore();
+  }
 }
+
+/* ============================================================================
+ * 4. HIGH-QUALITY VIDEO RECORDER + SERVER MP4 TRANSCODER
+ * ========================================================================== */
 
 export async function recordVideoFromScript(
   script: VideoScript,
   branding: BrandingConfig,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number, stageLabel?: string) => void
 ): Promise<RenderedVideoResult> {
-  await preloadThemeBackgrounds();
-  if (document.fonts && document.fonts.ready) {
-    await document.fonts.ready;
-  }
-
-  const canvas = document.createElement('canvas');
   const { width, height } = getVideoDimensions(script.aspectRatio);
+  const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Canvas 2D context unavailable.');
+  }
 
-  renderVideoFrame(canvas, script, branding, 0);
+  const totalSec = script.scenes.reduce(
+    (sum, s) => sum + Math.max(1.5, s.durationSec),
+    0
+  );
 
+  // Start silent-to-speaker audio session routed purely to MediaStream for clean capture
+  const audioSession = await startVideoAudioSession(script, 0, true);
   const canvasStream = canvas.captureStream(30);
-  const audioSession = startVideoAudioSession(script, {
-    outputToSpeakers: false,
-    outputToStream: true,
-    startOffsetSec: 0,
-  });
-
   const combinedStream = new MediaStream([
     ...canvasStream.getVideoTracks(),
     ...audioSession.stream.getAudioTracks(),
   ]);
 
-  const { recorderMime, baseMime, extension } = pickSupportedRecorderMime();
-  const chunks: BlobPart[] = [];
+  const preferredMimes = [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+  ];
+  const chosenMime =
+    preferredMimes.find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+
   const recorder = new MediaRecorder(combinedStream, {
-    mimeType: recorderMime,
-    videoBitsPerSecond: 3_500_000,
+    mimeType: chosenMime,
+    videoBitsPerSecond: 3_200_000,
+    audioBitsPerSecond: 128_000,
   });
 
+  const chunks: BlobPart[] = [];
   recorder.ondataavailable = (ev) => {
     if (ev.data && ev.data.size > 0) {
       chunks.push(ev.data);
     }
   };
 
-  return new Promise<RenderedVideoResult>((resolve, reject) => {
-    let rafId = 0;
-    const totalMs = Math.max(2000, script.totalDurationSec * 1000);
-    const startWall = performance.now();
-
-    recorder.onerror = () => {
-      cancelAnimationFrame(rafId);
-      audioSession.stop();
-      reject(new Error('ভিডিও রেকর্ড করতে ব্রাউজার সমস্যা করেছে।'));
-    };
-
+  const stoppedPromise = new Promise<Blob>((resolve) => {
     recorder.onstop = () => {
-      cancelAnimationFrame(rafId);
-      audioSession.stop();
-      combinedStream.getTracks().forEach((t) => t.stop());
-      // Use clean baseMime (no unquoted ;codecs= parameter!) so FormData/Multer always preserves valid MIME
-      const blob = new Blob(chunks, { type: baseMime });
-      const objectUrl = URL.createObjectURL(blob);
-      onProgress?.(100);
-      resolve({
-        blob,
-        mimeType: baseMime,
-        extension,
-        objectUrl,
-        durationSec: script.totalDurationSec,
-      });
+      resolve(new Blob(chunks, { type: chosenMime }));
     };
-
-    recorder.start(250);
-
-    const step = (now: number) => {
-      const elapsedMs = now - startWall;
-      const elapsedSec = Math.min(script.totalDurationSec, elapsedMs / 1000);
-      renderVideoFrame(canvas, script, branding, elapsedSec);
-      onProgress?.(Math.min(99, Math.round((elapsedMs / totalMs) * 100)));
-
-      if (elapsedMs < totalMs + 160) {
-        rafId = requestAnimationFrame(step);
-      } else {
-        if (recorder.state === 'recording') {
-          recorder.stop();
-        }
-      }
-    };
-
-    rafId = requestAnimationFrame(step);
   });
+
+  recorder.start(250);
+  const startTimeMs = performance.now();
+
+  await new Promise<void>((resolve) => {
+    const tick = () => {
+      const elapsedSec = (performance.now() - startTimeMs) / 1000;
+      if (elapsedSec >= totalSec) {
+        renderVideoFrame(ctx, script, branding, totalSec - 0.01);
+        onProgress?.(82, 'MP4 ফরম্যাটে প্রসেস হচ্ছে...');
+        resolve();
+        return;
+      }
+      renderVideoFrame(ctx, script, branding, elapsedSec);
+      const pct = Math.min(80, Math.round((elapsedSec / totalSec) * 80));
+      onProgress?.(pct, 'ভিডিও ফ্রেম রেকর্ড হচ্ছে...');
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+
+  recorder.stop();
+  const rawBlob = await stoppedPromise;
+  audioSession.stop();
+  canvasStream.getTracks().forEach((t) => t.stop());
+
+  // Transcode to universal H.264 + AAC MP4 via FFmpeg on server
+  try {
+    const form = new FormData();
+    form.append('video', rawBlob, 'recording.webm');
+    const res = await fetch('/api/video/transcode-mp4', {
+      method: 'POST',
+      body: form,
+    });
+    if (res.ok) {
+      const mp4Blob = await res.blob();
+      onProgress?.(100, 'MP4 তৈরি ও সেইভ সম্পন্ন!');
+      return {
+        blob: mp4Blob,
+        mimeType: 'video/mp4',
+        extension: 'mp4',
+        durationSec: totalSec,
+      };
+    }
+  } catch (err) {
+    console.warn('Server MP4 transcode skipped, returning WebM:', err);
+  }
+
+  onProgress?.(100, 'ভিডিও তৈরি সম্পন্ন!');
+  return {
+    blob: rawBlob,
+    mimeType: chosenMime,
+    extension: 'webm',
+    durationSec: totalSec,
+  };
 }

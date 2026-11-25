@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  CalendarClock,
   Check,
   ChevronDown,
   ChevronUp,
@@ -11,25 +10,31 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Save,
   Send,
+  Square,
+  Trash2,
+  Upload,
   Volume2,
-  VolumeX,
   Wand2,
 } from 'lucide-react';
 import type {
   AutomationSettings,
+  SavedRenderedVideo,
   VideoAction,
   VideoAspectRatio,
   VideoCamera,
   VideoItem,
   VideoMusicStyle,
   VideoProp,
+  VideoRenderStyle,
   VideoScene,
   VideoSfx,
   VideoStoryArc,
   VideoSubtitleStyle,
   VideoTheme,
   VideoVoiceEngine,
+  VoiceEffectPreset,
 } from '../types/comic';
 import { STARTER_VIDEOS } from '../lib/defaultVideos';
 import {
@@ -41,19 +46,18 @@ import {
   type RenderedVideoResult,
 } from '../lib/videoRenderer';
 import { startVideoAudioSession, type AudioSession } from '../lib/videoAudioEngine';
-import {
-  computeUpcomingBdSlots,
-  DEFAULT_BD_SLOTS,
-  formatBdTimeLabel,
-} from '../lib/scheduleHelper';
+import { getRenderedVideoBlobFromVault } from '../lib/videoStorage';
 
 interface VideoStudioViewProps {
   video: VideoItem;
   videos: VideoItem[];
+  savedRenderedVideos: SavedRenderedVideo[];
   settings: AutomationSettings;
   onSelectVideo: (video: VideoItem) => void;
   onUpdateVideo: (updated: VideoItem) => void;
   onCreateVideo: (newVideo: VideoItem) => void;
+  onSaveRenderedVideo: (video: VideoItem, rendered: RenderedVideoResult) => Promise<SavedRenderedVideo>;
+  onDeleteSavedRenderedVideo: (id: string) => Promise<void>;
   onPublishVideo: (
     video: VideoItem,
     rendered: RenderedVideoResult,
@@ -62,7 +66,11 @@ interface VideoStudioViewProps {
 }
 
 const THEME_OPTIONS: Array<{ value: 'auto' | VideoTheme; label: string }> = [
-  { value: 'auto', label: 'অটো (দৃশ্য অনুযায়ী বৈচিত্র্য)' },
+  { value: 'auto', label: 'অটো (দৃশ্য অনুযায়ী)' },
+  { value: 'room_door', label: 'ঘরের দরজা ও করিডোর' },
+  { value: 'bathroom_rush', label: 'বাথরুম ও টয়লেট' },
+  { value: 'bedroom_night', label: 'রাতের রুম' },
+  { value: 'exam_hall', label: 'পরীক্ষার হল' },
   { value: 'tea_stall', label: 'চা-দোকান ও আড্ডা' },
   { value: 'office_drama', label: 'অফিস ও বস' },
   { value: 'rain_storm', label: 'বৃষ্টি ও বজ্রপাত' },
@@ -79,6 +87,11 @@ const CAMERA_OPTIONS: Array<{ value: VideoCamera; label: string }> = [
 ];
 
 const SFX_OPTIONS: Array<{ value: VideoSfx; label: string }> = [
+  { value: 'knock_door', label: 'দরজায় কড়া নাড়া (ঠক ঠক)' },
+  { value: 'dramatic_boom', label: 'সিনেমার ড্রামাটিক বুম' },
+  { value: 'scream_sting', label: 'চমকানো চিৎকার স্টিং' },
+  { value: 'door_creak', label: 'দরজা খোলার শব্দ' },
+  { value: 'splat_funny', label: 'ফানি স্প্ল্যাট ও বোয়িং' },
   { value: 'laugh', label: 'হাসি (Haha)' },
   { value: 'gasp', label: 'শকড গ্যাস্প' },
   { value: 'thunder', label: 'বজ্রপাত' },
@@ -90,1036 +103,1361 @@ const SFX_OPTIONS: Array<{ value: VideoSfx; label: string }> = [
 ];
 
 const ACTION_OPTIONS: Array<{ value: VideoAction; label: string }> = [
+  { value: 'knock_door', label: 'দরজা ধাক্কানো' },
+  { value: 'desperate_squeeze', label: 'চেপে ধরে কাঁপা' },
+  { value: 'scream_jaw', label: 'মুখ লম্বা করে চিৎকার' },
+  { value: 'dramatic_closeup', label: 'হিরো/ভিলেন ক্লোজ-আপ' },
+  { value: 'door_peek', label: 'দরজা খুলে উঁকি' },
+  { value: 'collapsed_mess', label: 'মাটিতে বসে পড়া' },
   { value: 'idle', label: 'দাঁড়িয়ে থাকা' },
   { value: 'walk_in', label: 'হেঁটে আসা' },
   { value: 'laugh', label: 'হাসা' },
   { value: 'point_laugh', label: 'আঙুল তুলে হাসা' },
-  { value: 'panting', label: 'হাঁপানো (পিপাসা)' },
+  { value: 'panting', label: 'হাঁপানো' },
   { value: 'shocked_jump', label: 'চমকে লাফ' },
   { value: 'eye_pop', label: 'চোখ বেরিয়ে আসা' },
   { value: 'facepalm', label: 'মাথায় হাত' },
   { value: 'hands_up', label: 'হাত তোলা' },
-  { value: 'pour_water', label: 'পানি ঢালা' },
-  { value: 'sip_tea', label: 'চা পান' },
   { value: 'run', label: 'দৌড়ানো' },
 ];
 
 const PROP_OPTIONS: Array<{ value: VideoProp; label: string }> = [
   { value: 'none', label: 'কিছু নেই' },
-  { value: 'umbrella_normal', label: 'স্বাভাবিক ছাতা' },
-  { value: 'umbrella_upside_down', label: 'উল্টো ছাতা (পানিভর্তি)' },
-  { value: 'broken_umbrella', label: 'ভাঙা ছাতা' },
-  { value: 'water_tap_glass', label: 'ট্যাপ ও পানির গ্লাস' },
+  { value: 'door_closed', label: 'বন্ধ দরজা' },
+  { value: 'door_open', label: 'খোলা দরজা' },
+  { value: 'toilet_squat', label: 'টয়লেট প্যান' },
+  { value: 'splat_mess', label: 'মেঝেতে ছিটকে পড়া দাগ' },
   { value: 'tea_cup', label: 'চায়ের কাপ' },
   { value: 'smartphone', label: 'স্মার্টফোন' },
-  { value: 'money', label: 'টাকা' },
-  { value: 'laptop', label: 'ল্যাপটপ' },
+  { value: 'money', label: 'টাকার নোট' },
   { value: 'clock', label: 'ঘড়ি' },
+];
+
+const VOICE_EFFECT_OPTIONS: Array<{ value: VoiceEffectPreset; label: string }> = [
+  { value: 'normal', label: 'স্বাভাবিক কণ্ঠ' },
+  { value: 'panicked', label: 'আতঙ্কিত / তাড়াহুড়ো' },
+  { value: 'dramatic_boss', label: 'ড্রামাটিক সিনেমার বেজ + ইকো' },
+  { value: 'cartoon_high', label: 'ফানি কার্টুন চিকন কণ্ঠ' },
 ];
 
 export function VideoStudioView({
   video,
   videos,
+  savedRenderedVideos,
   settings,
   onSelectVideo,
   onUpdateVideo,
   onCreateVideo,
+  onSaveRenderedVideo,
+  onDeleteSavedRenderedVideo,
   onPublishVideo,
 }: VideoStudioViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const audioRef = useRef<AudioSession | null>(null);
-  const rafRef = useRef<number>(0);
-  const playStartWallRef = useRef<number>(0);
-  const playOffsetRef = useRef<number>(0);
+  const audioSessionRef = useRef<AudioSession | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [isMuted, setIsMuted] = useState(false);
-
-  // Generator controls
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [renderStyle, setRenderStyle] = useState<VideoRenderStyle>(
+    video.renderStyle || 'stick_meme'
+  );
+  const [category, setCategory] = useState<string>('auto');
   const [themeChoice, setThemeChoice] = useState<'auto' | VideoTheme>('auto');
   const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>(video.aspectRatio || '9:16');
-  const [storyArc, setStoryArc] = useState<VideoStoryArc>(video.storyArc || 'viral_story');
+  const [dialogueMode, setDialogueMode] = useState<'bangla' | 'silent'>('bangla');
+  const [musicStyle, setMusicStyle] = useState<VideoMusicStyle>(
+    video.musicStyle || 'cinematic_parody'
+  );
   const [voiceEngine, setVoiceEngine] = useState<VideoVoiceEngine>(video.voiceEngine || 'auto');
+  const [storyArc, setStoryArc] = useState<VideoStoryArc>(video.storyArc || 'viral_story');
   const [subtitleStyle, setSubtitleStyle] = useState<VideoSubtitleStyle>(
-    video.subtitleStyle || 'reels_bold'
+    video.subtitleStyle || 'meme_clean'
   );
-  const [musicStyle, setMusicStyle] = useState<VideoMusicStyle>(video.musicStyle || 'comedy');
-  const [targetDurationSec, setTargetDurationSec] = useState(25);
   const [customHint, setCustomHint] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [isSynthesizingVoice, setIsSynthesizingVoice] = useState(false);
 
-  // Render & publish state
-  const [renderProgress, setRenderProgress] = useState<number | null>(null);
-  const [renderLabel, setRenderLabel] = useState('অডিও ও ভয়েসসহ HD ভিডিও তৈরি হচ্ছে...');
-  const [renderedResult, setRenderedResult] = useState<RenderedVideoResult | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isSynthesizingVoices, setIsSynthesizingVoices] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [renderPct, setRenderPct] = useState(0);
+  const [renderStage, setRenderStage] = useState('');
   const [isPublishing, setIsPublishing] = useState(false);
-  const [statusBanner, setStatusBanner] = useState<{ type: 'ok' | 'err'; text: string } | null>(
-    null
-  );
-  const [copied, setCopied] = useState(false);
-  const [showSceneEditor, setShowSceneEditor] = useState(false);
-  const [activeSceneIdx, setActiveSceneIdx] = useState(0);
+  const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [lastRendered, setLastRendered] = useState<RenderedVideoResult | null>(null);
+  const [copiedCaption, setCopiedCaption] = useState(false);
+  const [expandedScene, setExpandedScene] = useState<number | null>(0);
+  const [recordingKey, setRecordingKey] = useState<string | null>(null);
+  const [playingSavedUrl, setPlayingSavedUrl] = useState<{ id: string; url: string; title: string } | null>(null);
+
+  const totalDuration = video.scenes.reduce((acc, s) => acc + Math.max(1.5, s.durationSec), 0);
+
+  useEffect(() => {
+    preloadThemeBackgrounds().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    setRenderStyle(video.renderStyle || 'stick_meme');
+    setAspectRatio(video.aspectRatio || '9:16');
+    setMusicStyle(video.musicStyle || 'cinematic_parody');
+    setSubtitleStyle(video.subtitleStyle || 'meme_clean');
+    setLastRendered(null);
+    setElapsedSec(0);
+    setIsPlaying(false);
+  }, [video.id]);
 
   const stopPlayback = useCallback(() => {
-    setIsPlaying(false);
-    cancelAnimationFrame(rafRef.current);
-    if (audioRef.current) {
-      audioRef.current.stop();
-      audioRef.current = null;
-    }
-  }, []);
-
-  // Draw static frame whenever video/time/branding changes and not actively animating
-  useEffect(() => {
-    if (!canvasRef.current || isPlaying) return;
-    let alive = true;
-    const draw = async () => {
-      try {
-        await preloadThemeBackgrounds();
-        if (document.fonts && document.fonts.ready) {
-          await document.fonts.ready;
-        }
-      } catch {
-        // Ignore font readiness fallback
-      }
-      if (!alive || !canvasRef.current) return;
-      renderVideoFrame(canvasRef.current, video, settings, currentTime);
-    };
-    draw();
-    return () => {
-      alive = false;
-    };
-  }, [video, settings, currentTime, isPlaying]);
-
-  // Clear cached rendered blob when script or branding changes
-  useEffect(() => {
-    setRenderedResult((prev) => {
-      if (prev) URL.revokeObjectURL(prev.objectUrl);
-      return null;
-    });
-  }, [
-    video.id,
-    video.scenes,
-    video.voiceClips,
-    video.aspectRatio,
-    video.musicStyle,
-    video.subtitleStyle,
-    settings.logoText,
-    settings.logoOpacity,
-  ]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
+    if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
-      if (audioRef.current) {
-        audioRef.current.stop();
-        audioRef.current = null;
-      }
-    };
+      rafRef.current = null;
+    }
+    if (audioSessionRef.current) {
+      audioSessionRef.current.stop();
+      audioSessionRef.current = null;
+    }
+    setIsPlaying(false);
   }, []);
 
-  const startPlayback = useCallback(
-    (fromTime?: number) => {
+  useEffect(() => {
+    return () => {
       stopPlayback();
-      const startAt =
-        fromTime !== undefined
-          ? fromTime
-          : currentTime >= video.totalDurationSec - 0.1
-            ? 0
-            : currentTime;
-      playOffsetRef.current = startAt;
-      playStartWallRef.current = performance.now();
-      setCurrentTime(startAt);
-      setIsPlaying(true);
+    };
+  }, [stopPlayback]);
 
-      if (!isMuted) {
-        audioRef.current = startVideoAudioSession(video, {
-          outputToSpeakers: true,
-          outputToStream: false,
-          startOffsetSec: startAt,
-        });
+  // Paint frame whenever elapsedSec or video changes while paused
+  useEffect(() => {
+    if (isPlaying) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dims = getVideoDimensions(video.aspectRatio);
+    canvas.width = dims.width;
+    canvas.height = dims.height;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      renderVideoFrame(ctx, video, settings, elapsedSec);
+    }
+  }, [video, settings, elapsedSec, isPlaying]);
+
+  const startPlayback = async (fromSec = elapsedSec) => {
+    stopPlayback();
+    const startAt = fromSec >= totalDuration - 0.1 ? 0 : fromSec;
+    setElapsedSec(startAt);
+    setIsPlaying(true);
+
+    try {
+      const session = await startVideoAudioSession(video, startAt, false);
+      audioSessionRef.current = session;
+    } catch {
+      // Ignore audio block if autoplay prevented
+    }
+
+    const startWall = performance.now();
+    const tick = () => {
+      const nowElapsed = startAt + (performance.now() - startWall) / 1000;
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const dims = getVideoDimensions(video.aspectRatio);
+        if (canvas.width !== dims.width || canvas.height !== dims.height) {
+          canvas.width = dims.width;
+          canvas.height = dims.height;
+        }
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          renderVideoFrame(ctx, video, settings, Math.min(nowElapsed, totalDuration - 0.01));
+        }
       }
 
-      const tick = (now: number) => {
-        const elapsed = (now - playStartWallRef.current) / 1000;
-        const nextT = Math.min(video.totalDurationSec, playOffsetRef.current + elapsed);
-        setCurrentTime(nextT);
-        if (canvasRef.current) {
-          renderVideoFrame(canvasRef.current, video, settings, nextT);
-        }
-        if (nextT < video.totalDurationSec) {
-          rafRef.current = requestAnimationFrame(tick);
-        } else {
-          stopPlayback();
-        }
-      };
+      if (nowElapsed >= totalDuration) {
+        setElapsedSec(0);
+        stopPlayback();
+        return;
+      }
+      setElapsedSec(nowElapsed);
       rafRef.current = requestAnimationFrame(tick);
-    },
-    [currentTime, isMuted, settings, stopPlayback, video]
-  );
-
-  const togglePlay = () => {
-    if (isPlaying) {
-      stopPlayback();
-    } else {
-      startPlayback();
-    }
-  };
-
-  const handleRestart = () => {
-    startPlayback(0);
-  };
-
-  const handleScrub = (val: number) => {
-    stopPlayback();
-    setCurrentTime(val);
-  };
-
-  const synthesizeVoicesForScript = async (
-    targetScript: VideoItem,
-    engine: VideoVoiceEngine
-  ): Promise<VideoItem> => {
-    if (engine === 'none') {
-      return { ...targetScript, voiceClips: [], voiceEngine: 'none' };
-    }
-    const res = await fetch('/api/video/synthesize-voices', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        scenes: targetScript.scenes,
-        voiceEngine: engine,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'বাংলা AI ভয়েস তৈরি করা যায়নি।');
-    }
-    return {
-      ...targetScript,
-      scenes: data.scenes || targetScript.scenes,
-      totalDurationSec: data.totalDurationSec || targetScript.totalDurationSec,
-      voiceClips: data.voiceClips || [],
-      voiceEngine: engine,
     };
+    rafRef.current = requestAnimationFrame(tick);
   };
 
-  const handleSynthesizeCurrentVideo = async () => {
-    stopPlayback();
-    setIsSynthesizingVoice(true);
-    setStatusBanner(null);
+  const handleSynthesizeVoicesForScript = async (
+    targetScript: VideoItem,
+    engineOverride?: VideoVoiceEngine
+  ): Promise<VideoItem> => {
+    const engine = engineOverride || voiceEngine;
+    if (engine === 'none') {
+      const cleaned = { ...targetScript, voiceClips: [] };
+      onUpdateVideo(cleaned);
+      return cleaned;
+    }
+
+    setIsSynthesizingVoices(true);
     try {
-      const updated = await synthesizeVoicesForScript(
-        video,
-        voiceEngine === 'none' ? 'auto' : voiceEngine
+      const res = await fetch('/api/video/synthesize-voices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scenes: targetScript.scenes,
+          voiceEngine: engine,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ভয়েস তৈরি করা যায়নি।');
+
+      const nextScenes = Array.isArray(data.scenes) ? data.scenes : targetScript.scenes;
+      const nextDuration = Number(
+        nextScenes
+          .reduce((acc: number, s: VideoScene) => acc + Math.max(1.5, s.durationSec), 0)
+          .toFixed(1)
       );
+      const updated: VideoItem = {
+        ...targetScript,
+        voiceEngine: engine,
+        scenes: nextScenes,
+        totalDurationSec: nextDuration,
+        voiceClips: Array.isArray(data.voiceClips) ? data.voiceClips : [],
+      };
       onUpdateVideo(updated);
-      const count = updated.voiceClips?.length || 0;
-      setStatusBanner({
-        type: 'ok',
-        text: `${count}টি সংলাপের ফ্রি বাংলা AI ভয়েসওভার ও লিপ-সিঙ্ক যুক্ত হয়েছে! এখন প্লে করে শুনুন।`,
-      });
-    } catch (err) {
-      setStatusBanner({
-        type: 'err',
-        text: err instanceof Error ? err.message : 'ভয়েস যুক্ত করতে সমস্যা হয়েছে।',
-      });
+      return updated;
     } finally {
-      setIsSynthesizingVoice(false);
+      setIsSynthesizingVoices(false);
     }
   };
 
-  const handleGenerateVideo = async () => {
+  const handleAutoGenerate = async () => {
     stopPlayback();
     setIsGenerating(true);
-    setStatusBanner(null);
+    setStatusMsg(null);
+    setLastRendered(null);
+
     try {
       const res = await fetch('/api/generate-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          category: settings.preferredCategory || 'auto',
+          category,
           theme: themeChoice,
+          renderStyle,
           aspectRatio,
-          dialogueMode: voiceEngine === 'none' ? 'silent' : 'bangla',
+          dialogueMode,
           musicStyle,
           storyArc,
-          targetDurationSec,
+          targetDurationSec: storyArc === 'viral_story' ? 22 : 13,
           customHint,
-          recentTitles: videos.slice(0, 10).map((v) => v.title),
+          recentTitles: videos.slice(0, 8).map((v) => v.title),
         }),
       });
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'ভিডিও স্টোরিবোর্ড তৈরি করা যায়নি।');
-      }
+      if (!res.ok) throw new Error(data.error || 'AI ভিডিও তৈরি করা যায়নি।');
 
-      let created: VideoItem = {
+      const newVideo: VideoItem = {
         ...data,
-        subtitleStyle,
-        voiceEngine,
         status: 'draft',
+        voiceEngine,
+        subtitleStyle,
       };
+      onCreateVideo(newVideo);
 
-      if (voiceEngine !== 'none') {
-        setIsSynthesizingVoice(true);
-        try {
-          created = await synthesizeVoicesForScript(created, voiceEngine);
-        } catch (voiceErr) {
-          console.warn('Auto voice synthesis skipped:', voiceErr);
-        } finally {
-          setIsSynthesizingVoice(false);
-        }
+      if (dialogueMode === 'bangla' && voiceEngine !== 'none') {
+        setStatusMsg({
+          type: 'ok',
+          text: 'গল্প তৈরি হয়েছে! এখন কপিরাইট-ফ্রি বাংলা ডাবিং ও ভয়েস ইফেক্ট যুক্ত হচ্ছে...',
+        });
+        await handleSynthesizeVoicesForScript(newVideo, voiceEngine);
       }
 
-      onCreateVideo(created);
-      setCurrentTime(0);
-      setActiveSceneIdx(0);
-      const voiceCount = created.voiceClips?.length || 0;
-      setStatusBanner({
+      setStatusMsg({
         type: 'ok',
-        text:
-          voiceCount > 0
-            ? `নতুন ${created.totalDurationSec} সেকেন্ডের AI ভিডিও ও ${voiceCount}টি বাংলা ভয়েস তৈরি হয়েছে: "${created.title}"`
-            : `নতুন ${created.totalDurationSec} সেকেন্ডের ভিডিও তৈরি হয়েছে: "${created.title}"`,
+        text: '১০০% কপিরাইট-ফ্রি অটো ভিডিও ও ডাবিং প্রস্তুত! এখন Play বা Render & Save চাপুন।',
       });
+      setExpandedScene(0);
     } catch (err) {
-      setStatusBanner({
+      setStatusMsg({
         type: 'err',
-        text: err instanceof Error ? err.message : 'ভিডিও তৈরিতে সমস্যা হয়েছে।',
+        text: err instanceof Error ? err.message : 'ভিডিও তৈরি ব্যর্থ হয়েছে।',
       });
     } finally {
       setIsGenerating(false);
-      setIsSynthesizingVoice(false);
     }
   };
 
-  const ensureRenderedVideo = async (): Promise<RenderedVideoResult> => {
-    if (renderedResult) return renderedResult;
+  const handleRenderAndSave = async () => {
     stopPlayback();
-    setRenderLabel('অডিও, ভয়েস ও ২ডি অ্যানিমেশন রেন্ডার হচ্ছে...');
-    setRenderProgress(0);
+    setIsRecording(true);
+    setRenderPct(0);
+    setRenderStage('প্রস্তুত হচ্ছে...');
+    setStatusMsg(null);
+
     try {
-      const result = await recordVideoFromScript(video, settings, (pct) => {
-        setRenderProgress(pct);
+      let workingVideo = video;
+      const hasSpeech = video.scenes.some((s) =>
+        s.characters.some((c) => (c.speech || '').trim().length > 0 && !c.customAudioDataUrl)
+      );
+      if (hasSpeech && (!video.voiceClips || video.voiceClips.length === 0) && voiceEngine !== 'none') {
+        setRenderStage('বাংলা AI ডাবিং তৈরি হচ্ছে...');
+        workingVideo = await handleSynthesizeVoicesForScript(video, voiceEngine);
+      }
+
+      const rendered = await recordVideoFromScript(workingVideo, settings, (pct, label) => {
+        setRenderPct(pct);
+        if (label) setRenderStage(label);
       });
-      setRenderedResult(result);
-      return result;
-    } finally {
-      setTimeout(() => setRenderProgress(null), 600);
-    }
-  };
 
-  const handleRenderAndDownload = async () => {
-    setStatusBanner(null);
-    try {
-      const res = await ensureRenderedVideo();
-      let downloadUrl = res.objectUrl;
-      let shouldRevoke = false;
+      setLastRendered(rendered);
+      await onSaveRenderedVideo(workingVideo, rendered);
 
-      if (res.extension !== 'mp4') {
-        setRenderLabel('সার্ভারে FFmpeg দিয়ে Facebook-ready H.264 MP4 হচ্ছে...');
-        setRenderProgress(99);
-        const form = new FormData();
-        form.append('video', res.blob, `rafu-folk-${video.id}.${res.extension}`);
-        const convRes = await fetch('/api/video/transcode-mp4', {
-          method: 'POST',
-          body: form,
-        });
-        if (!convRes.ok) {
-          const errJson = await convRes.json().catch(() => ({}));
-          throw new Error(errJson.error || 'MP4 কনভার্ট করা যায়নি।');
-        }
-        const mp4Blob = await convRes.blob();
-        downloadUrl = URL.createObjectURL(mp4Blob);
-        shouldRevoke = true;
-        setRenderProgress(null);
-      }
-
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = `rafu-folk-${video.id}.mp4`;
-      a.click();
-      if (shouldRevoke) {
-        setTimeout(() => URL.revokeObjectURL(downloadUrl), 5000);
-      }
-
-      setStatusBanner({
+      setStatusMsg({
         type: 'ok',
-        text: `${video.totalDurationSec} সেকেন্ডের HD কার্টুন ভিডিও (.mp4) ডাউনলোড শুরু হয়েছে!`,
+        text: `ভিডিও রেন্ডার হয়ে স্থায়ীভাবে সেইভ হয়েছে (${(rendered.blob.size / (1024 * 1024)).toFixed(2)} MB · ${rendered.extension.toUpperCase()})!`,
       });
     } catch (err) {
-      setRenderProgress(null);
-      setStatusBanner({
+      setStatusMsg({
         type: 'err',
         text: err instanceof Error ? err.message : 'ভিডিও রেন্ডার করা যায়নি।',
       });
-    }
-  };
-
-  const handlePublish = async (scheduleNextSlot: boolean) => {
-    setIsPublishing(true);
-    setStatusBanner(null);
-    try {
-      const res = await ensureRenderedVideo();
-      let scheduledDate: Date | undefined;
-      if (scheduleNextSlot) {
-        const slots = settings.dailySlots?.length ? settings.dailySlots : DEFAULT_BD_SLOTS;
-        const [nextSlot] = computeUpcomingBdSlots(slots, 1, 0, new Date(), 15);
-        scheduledDate = nextSlot;
-      }
-      await onPublishVideo(video, res, scheduledDate);
-      setStatusBanner({
-        type: 'ok',
-        text: scheduledDate
-          ? `MP4 ভিডিও সফলভাবে Facebook সার্ভারে শিডিউল হয়েছে (${formatBdTimeLabel(scheduledDate)})`
-          : 'MP4 ভিডিও সফলভাবে Facebook Page-এ পোস্ট হয়েছে!',
-      });
-    } catch (err) {
-      setStatusBanner({
-        type: 'err',
-        text: err instanceof Error ? err.message : 'Facebook-এ ভিডিও পাঠানো যায়নি।',
-      });
     } finally {
-      setIsPublishing(false);
+      setIsRecording(false);
     }
   };
 
-  const handleCopyCaption = async () => {
-    try {
-      await navigator.clipboard.writeText(video.fbCaption);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch {
-      // Ignore clipboard failure
-    }
+  const handleDownloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
   };
 
-  const activeScene: VideoScene | undefined = video.scenes[activeSceneIdx] || video.scenes[0];
-  const currentPlayingScene = getSceneAtTime(video, currentTime).scene;
-  const dims = getVideoDimensions(video.aspectRatio);
-  const hasVoiceClips = (video.voiceClips?.length || 0) > 0;
-
-  const updateActiveScene = (patch: Partial<VideoScene>) => {
-    const nextScenes = video.scenes.map((sc, idx) =>
-      idx === activeSceneIdx ? { ...sc, ...patch } : sc
-    );
-    const totalDurationSec = Number(
-      nextScenes.reduce((sum, s) => sum + s.durationSec, 0).toFixed(1)
-    );
-    onUpdateVideo({ ...video, scenes: nextScenes, totalDurationSec });
-  };
-
-  const updateSceneChar = (
+  const handleUploadCustomAudio = async (
+    sceneIdx: number,
     charIdx: number,
-    patch: Partial<VideoScene['characters'][number]>
+    file: File | undefined
   ) => {
-    if (!activeScene) return;
-    const nextChars = activeScene.characters.map((c, ci) =>
-      ci === charIdx ? { ...c, ...patch } : c
-    );
-    updateActiveScene({ characters: nextChars });
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      if (!dataUrl) return;
+      const nextScenes = video.scenes.map((sc, sI) =>
+        sI === sceneIdx
+          ? {
+              ...sc,
+              characters: sc.characters.map((ch, cI) =>
+                cI === charIdx ? { ...ch, customAudioDataUrl: dataUrl } : ch
+              ),
+            }
+          : sc
+      );
+      onUpdateVideo({ ...video, scenes: nextScenes });
+      setStatusMsg({
+        type: 'ok',
+        text: 'আপনার নিজস্ব কপিরাইট-ফ্রি অডিও ক্লিপ দৃশ্যে যুক্ত হয়েছে!',
+      });
+    };
+    reader.readAsDataURL(file);
   };
+
+  const toggleMicRecording = async (sceneIdx: number, charIdx: number) => {
+    const key = `${sceneIdx}-${charIdx}`;
+    if (recordingKey === key && mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      setRecordingKey(null);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      const chunks: BlobPart[] = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = String(reader.result || '');
+          const nextScenes = video.scenes.map((sc, sI) =>
+            sI === sceneIdx
+              ? {
+                  ...sc,
+                  characters: sc.characters.map((ch, cI) =>
+                    cI === charIdx ? { ...ch, customAudioDataUrl: dataUrl } : ch
+                  ),
+                }
+              : sc
+          );
+          onUpdateVideo({ ...video, scenes: nextScenes });
+          setStatusMsg({ type: 'ok', text: 'আপনার ভয়েস রেকর্ড সফলভাবে যুক্ত হয়েছে!' });
+        };
+        reader.readAsDataURL(blob);
+      };
+      mediaRecorderRef.current = rec;
+      rec.start();
+      setRecordingKey(key);
+    } catch {
+      setStatusMsg({
+        type: 'err',
+        text: 'মাইক্রোফোন অনুমতি পাওয়া যায়নি। ব্রাউজার সেটিংস চেক করুন।',
+      });
+    }
+  };
+
+  const handlePlaySavedItem = async (item: SavedRenderedVideo) => {
+    if (playingSavedUrl?.id === item.id) {
+      setPlayingSavedUrl(null);
+      return;
+    }
+    const localBlob = await getRenderedVideoBlobFromVault(item.id);
+    if (localBlob) {
+      const url = URL.createObjectURL(localBlob);
+      setPlayingSavedUrl({ id: item.id, url, title: item.title });
+      return;
+    }
+    if (item.serverUrl) {
+      setPlayingSavedUrl({ id: item.id, url: item.serverUrl, title: item.title });
+    }
+  };
+
+  const handleDownloadSavedItem = async (item: SavedRenderedVideo) => {
+    const localBlob = await getRenderedVideoBlobFromVault(item.id);
+    const ext = item.mimeType?.includes('mp4') ? 'mp4' : 'webm';
+    if (localBlob) {
+      handleDownloadBlob(localBlob, `${item.id}.${ext}`);
+      return;
+    }
+    if (item.serverUrl) {
+      const a = document.createElement('a');
+      a.href = `${item.serverUrl}?download=1`;
+      a.download = `${item.id}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  };
+
+  const currentSceneInfo = getSceneAtTime(video, elapsedSec);
 
   return (
-    <div className="grid grid-cols-1 gap-8 xl:grid-cols-12">
-      {/* Left Column: Live Animated Player & Export / Facebook MP4 Publish */}
-      <div className="space-y-6 xl:col-span-7">
-        {statusBanner && (
-          <div
-            className={`rounded-lg border px-4 py-3 text-sm font-medium ${
-              statusBanner.type === 'ok'
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                : 'border-red-200 bg-red-50 text-red-900'
-            }`}
-          >
-            {statusBanner.text}
-          </div>
-        )}
-
-        <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="font-display text-lg font-bold text-slate-900">{video.title}</h2>
-              <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                <span>{video.category}</span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono-tabular">{video.totalDurationSec} সেকেন্ড</span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono-tabular">
-                  {dims.width}×{dims.height} ({video.aspectRatio})
-                </span>
-                <span aria-hidden="true">·</span>
-                <span className={hasVoiceClips ? 'font-semibold text-emerald-700' : 'text-amber-700'}>
-                  {hasVoiceClips
-                    ? `বাংলা AI ভয়েস যুক্ত (${video.voiceClips?.length} ক্লিপ)`
-                    : 'ভয়েস যুক্ত করা হয়নি'}
-                </span>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-1.5">
-              {STARTER_VIDEOS.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => {
-                    stopPlayback();
-                    setCurrentTime(0);
-                    setActiveSceneIdx(0);
-                    onSelectVideo(preset);
-                  }}
-                  className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                    video.id === preset.id
-                      ? 'border-slate-900 bg-slate-900 text-white'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  {preset.title}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Animated Canvas Stage */}
-          <div className="mt-4 flex justify-center rounded-xl bg-slate-950 p-4">
-            <canvas
-              ref={canvasRef}
-              onClick={togglePlay}
-              className={`cursor-pointer rounded-lg border border-slate-800 shadow-sm ${
-                video.aspectRatio === '9:16'
-                  ? 'max-h-[540px] w-auto max-w-full'
-                  : 'max-h-[480px] w-auto max-w-full'
-              }`}
-              aria-label={`Animated cartoon video preview: ${video.title}`}
-            />
-          </div>
-
-          {/* Playback Controls & Scrub Bar */}
-          <div className="mt-4 space-y-3">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <button
-                type="button"
-                onClick={togglePlay}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-bold text-white hover:bg-slate-800 whitespace-nowrap shrink-0"
-              >
-                {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                <span>{isPlaying ? 'থামান' : 'প্লে করুন'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleRestart}
-                title="শুরু থেকে দেখুন"
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                <span>রিস্টার্ট</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const next = !isMuted;
-                  setIsMuted(next);
-                  if (next && audioRef.current) {
-                    audioRef.current.stop();
-                    audioRef.current = null;
-                  }
-                }}
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
-              >
-                {isMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
-                <span>{isMuted ? 'মিউট' : 'সাউন্ড চালু'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleSynthesizeCurrentVideo}
-                disabled={isSynthesizingVoice || isGenerating}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 whitespace-nowrap shrink-0"
-              >
-                <Mic className="h-3.5 w-3.5" />
-                <span>
-                  {isSynthesizingVoice
-                    ? 'ভয়েস তৈরি হচ্ছে...'
-                    : hasVoiceClips
-                      ? 'ভয়েস রি-জেনারেট'
-                      : 'বাংলা AI ভয়েস যোগ করুন'}
-                </span>
-              </button>
-
-              <div className="ml-auto font-mono-tabular text-xs font-semibold text-slate-600 whitespace-nowrap">
-                {currentTime.toFixed(1)}s / {video.totalDurationSec.toFixed(1)}s · দৃশ্য{' '}
-                {(currentPlayingScene?.sceneIndex ?? 0) + 1}
-              </div>
-            </div>
-
-            <input
-              type="range"
-              min={0}
-              max={video.totalDurationSec}
-              step={0.1}
-              value={currentTime}
-              onChange={(e) => handleScrub(Number(e.target.value))}
-              className="w-full accent-slate-900"
-              aria-label="Video timeline scrubber"
-            />
-          </div>
-
-          {renderProgress !== null && (
-            <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-900">
-              <div className="flex items-center justify-between">
-                <span>{renderLabel}</span>
-                <span className="font-mono-tabular">{renderProgress}%</span>
-              </div>
-              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-blue-200">
-                <div
-                  className="h-full bg-blue-700 transition-all"
-                  style={{ width: `${renderProgress}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Primary Export & Facebook Video Actions */}
-          <div className="mt-5 grid grid-cols-1 gap-2.5 border-t border-slate-100 pt-4 sm:grid-cols-3">
-            <button
-              type="button"
-              onClick={handleRenderAndDownload}
-              disabled={renderProgress !== null || isPublishing}
-              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-900 bg-white px-3.5 py-2.5 text-xs font-bold text-slate-900 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
-            >
-              <Download className="h-4 w-4 shrink-0" />
-              <span>MP4 ডাউনলোড</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handlePublish(false)}
-              disabled={
-                renderProgress !== null ||
-                isPublishing ||
-                !settings.pageId ||
-                !settings.pageAccessToken
-              }
-              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-700 px-3.5 py-2.5 text-xs font-bold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
-            >
-              <Send className="h-4 w-4 shrink-0" />
-              <span>{isPublishing ? 'MP4 আপলোড হচ্ছে...' : 'Page-এ ভিডিও পোস্ট'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handlePublish(true)}
-              disabled={
-                renderProgress !== null ||
-                isPublishing ||
-                !settings.pageId ||
-                !settings.pageAccessToken
-              }
-              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2.5 text-xs font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
-            >
-              <CalendarClock className="h-4 w-4 shrink-0" />
-              <span>BD স্লটে শিডিউল</span>
-            </button>
-          </div>
+    <div className="space-y-6">
+      {/* Top Studio Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-slate-900">
+            স্টিক ফিগার ও কার্টুন ভিডিও স্টুডিও
+          </h1>
+          <p className="mt-1 text-sm text-slate-600">
+            ১০০% কপিরাইট-ফ্রি · অটো বাংলা স্ক্রিপ্ট ও ড্রামাটিক ডাবিং · স্থায়ী MP4 সংরক্ষণ
+          </p>
         </div>
 
-        {/* Facebook Video Caption */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <div className="flex items-center justify-between gap-2">
-            <label
-              htmlFor="video-fb-caption"
-              className="text-sm font-semibold text-slate-900"
-            >
-              Facebook ভিডিও / Reels ক্যাপশন
-            </label>
-            <button
-              type="button"
-              onClick={handleCopyCaption}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
-            >
-              {copied ? (
-                <>
-                  <Check className="h-3.5 w-3.5 text-emerald-600" />
-                  <span>কপি হয়েছে</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3.5 w-3.5" />
-                  <span>কপি</span>
-                </>
-              )}
-            </button>
-          </div>
-          <textarea
-            id="video-fb-caption"
-            rows={2}
-            value={video.fbCaption}
-            onChange={(e) => onUpdateVideo({ ...video, fbCaption: e.target.value })}
-            className="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:bg-white focus:outline-none"
-          />
-          {!settings.pageAccessToken && (
-            <p className="mt-2 text-xs text-slate-500">
-              সরাসরি Facebook Page-এ ভিডিও পোস্ট বা শিডিউল করতে "Facebook অটো-পোস্ট" ট্যাবে Page ID ও Token যুক্ত করুন।
-            </p>
-          )}
+        {/* Style Mode Segmented Switcher */}
+        <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+          <button
+            type="button"
+            onClick={() => {
+              setRenderStyle('stick_meme');
+              onUpdateVideo({ ...video, renderStyle: 'stick_meme', subtitleStyle: 'meme_clean' });
+            }}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+              renderStyle === 'stick_meme'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            স্টিক ফিগার মিম (সাদাকালো)
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setRenderStyle('cartoon_2d');
+              onUpdateVideo({ ...video, renderStyle: 'cartoon_2d', subtitleStyle: 'reels_bold' });
+            }}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+              renderStyle === 'cartoon_2d'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            ২ডি রঙিন কার্টুন
+          </button>
         </div>
       </div>
 
-      {/* Right Column: Automated AI Voice Cartoon Video Generator & Scene Editor */}
-      <div className="space-y-6 xl:col-span-5">
-        <div className="rounded-xl border border-slate-200 bg-white p-6">
-          <div className="flex items-center gap-2">
-            <Film className="h-5 w-5 text-slate-900" />
-            <h3 className="font-display text-lg font-bold text-slate-900">
-              অটো AI বাংলা কার্টুন ভিডিও
-            </h3>
-          </div>
-          <p className="mt-1 text-sm text-slate-600">
-            ফ্রি বাংলা AI ভয়েসওভার, লিপ-সিঙ্ক, ইলাস্ট্রেটেড ২ডি দৃশ্য, সাউন্ড ইফেক্ট ও H.264 MP4 এক্সপোর্টসহ সম্পূর্ণ অটো ভিডিও বানান।
-          </p>
+      {statusMsg && (
+        <div
+          className={`rounded-lg border px-4 py-3 text-sm font-medium ${
+            statusMsg.type === 'ok'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+              : 'border-red-200 bg-red-50 text-red-800'
+          }`}
+        >
+          {statusMsg.text}
+        </div>
+      )}
 
-          <div className="mt-5 space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+      {/* Main 2-Column Studio Grid */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        {/* LEFT: AI Generator + Scene Storyboard */}
+        <div className="space-y-6 lg:col-span-7">
+          {/* Auto AI Generator Panel */}
+          <section className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-bold text-slate-900">
+                ১. অটোমেটিক কপিরাইট-ফ্রি মিম ভিডিও তৈরি (AI)
+              </h2>
+              <span className="font-mono-tabular text-xs text-slate-500">
+                {storyArc === 'viral_story' ? '৪ দৃশ্য · ~২২ সেকেন্ড' : '৩ দৃশ্য · ~১৩ সেকেন্ড'}
+              </span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
-                <label htmlFor="vid-arc" className="block text-xs font-semibold text-slate-700">
-                  গল্পের দৈর্ঘ্য
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  গল্পের ধরন
                 </label>
                 <select
-                  id="vid-arc"
-                  value={storyArc}
-                  onChange={(e) => {
-                    const next = e.target.value as VideoStoryArc;
-                    setStoryArc(next);
-                    setTargetDurationSec(next === 'viral_story' ? 26 : 12);
-                  }}
-                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
                 >
-                  <option value="viral_story">ভাইরাল গল্প (২০–৪০ সে.)</option>
-                  <option value="quick_short">শর্ট জোক (১০–১৫ সে.)</option>
+                  <option value="auto">অটো (সেরা ভাইরাল ক্যাটাগরি)</option>
+                  <option value="বন্ধুদের আড্ডা ও মেস লাইফ">বন্ধুদের আড্ডা ও মেস লাইফ</option>
+                  <option value="টাকা ধার ও কৃপণ বন্ধু">টাকা ধার ও কৃপণ বন্ধু</option>
+                  <option value="দৈনন্দিন মজার বিব্রতকর ঘটনা">দৈনন্দিন বিব্রতকর ঘটনা</option>
+                  <option value="চা-দোকানের বুদ্ধিজীবী গপ্পো">চা-দোকানের গপ্পো</option>
+                  <option value="অফিস, বস ও ছুটির বাহানা">অফিস ও বস</option>
                 </select>
               </div>
 
               <div>
-                <label htmlFor="vid-voice" className="block text-xs font-semibold text-slate-700">
-                  ফ্রি বাংলা AI ভয়েস
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  ভয়েস ও ব্যাকগ্রাউন্ড মিউজিক
                 </label>
                 <select
-                  id="vid-voice"
+                  value={musicStyle}
+                  onChange={(e) => {
+                    const val = e.target.value as VideoMusicStyle;
+                    setMusicStyle(val);
+                    onUpdateVideo({ ...video, musicStyle: val });
+                  }}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                >
+                  <option value="cinematic_parody">ড্রামাটিক প্যারোডি (কপিরাইট-ফ্রি)</option>
+                  <option value="comedy">কমেডি পপ মিউজিক (কপিরাইট-ফ্রি)</option>
+                  <option value="quirky">মজার কুইর্কি টিউন</option>
+                  <option value="dramatic">সিরিয়াস টেনশন টিউন</option>
+                  <option value="none">মিউজিক ছাড়া</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  পরিবেশ / দৃশ্যপট
+                </label>
+                <select
+                  value={themeChoice}
+                  onChange={(e) => setThemeChoice(e.target.value as 'auto' | VideoTheme)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                >
+                  {THEME_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  ডাবিং ভয়েস ইঞ্জিন
+                </label>
+                <select
                   value={voiceEngine}
                   onChange={(e) => setVoiceEngine(e.target.value as VideoVoiceEngine)}
-                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
                 >
-                  <option value="auto">অটো (ফ্রি Neural + Gemini)</option>
-                  <option value="gemini_tts">Gemini 3.8 TTS ভয়েস</option>
-                  <option value="none">ভয়েস ছাড়া (শুধু SFX)</option>
+                  <option value="auto">অটো নিউরাল বাংলা + FFmpeg FX</option>
+                  <option value="gemini_tts">Gemini AI ভয়েস + ড্রামাটিক FX</option>
+                  <option value="none">নীরব (সাবটাইটেল + সাউন্ড ইফেক্ট)</option>
                 </select>
               </div>
             </div>
 
-            <div>
-              <label htmlFor="vid-theme" className="block text-xs font-semibold text-slate-700">
-                ব্যাকগ্রাউন্ড থিম
-              </label>
-              <select
-                id="vid-theme"
-                value={themeChoice}
-                onChange={(e) => setThemeChoice(e.target.value as 'auto' | VideoTheme)}
-                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none"
-              >
-                {THEME_OPTIONS.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label htmlFor="vid-ratio" className="block text-xs font-semibold text-slate-700">
-                  ভিডিও ফরম্যাট
-                </label>
-                <select
-                  id="vid-ratio"
-                  value={aspectRatio}
-                  onChange={(e) => setAspectRatio(e.target.value as VideoAspectRatio)}
-                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => setStoryArc('viral_story')}
+                  className={`rounded-md px-2.5 py-1 text-xs font-semibold whitespace-nowrap ${
+                    storyArc === 'viral_story'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600'
+                  }`}
                 >
-                  <option value="9:16">9:16 (Reels / Shorts)</option>
-                  <option value="1:1">1:1 (Square ফিড)</option>
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="vid-music" className="block text-xs font-semibold text-slate-700">
-                  মিউজিক স্টাইল
-                </label>
-                <select
-                  id="vid-music"
-                  value={musicStyle}
-                  onChange={(e) => setMusicStyle(e.target.value as VideoMusicStyle)}
-                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                  ভাইরাল গল্প (~২২ সে.)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStoryArc('quick_short')}
+                  className={`rounded-md px-2.5 py-1 text-xs font-semibold whitespace-nowrap ${
+                    storyArc === 'quick_short'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600'
+                  }`}
                 >
-                  <option value="comedy">ফানি কমেডি</option>
-                  <option value="quirky">দুষ্টু / কুইর্কি</option>
-                  <option value="dramatic">নাটকীয় টুইস্ট</option>
-                  <option value="none">শুধু সাউন্ড ইফেক্ট</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="vid-sub" className="block text-xs font-semibold text-slate-700">
-                ক্যাপশন / সাবটাইটেল ধরন
-              </label>
-              <select
-                id="vid-sub"
-                value={subtitleStyle}
-                onChange={(e) => {
-                  const next = e.target.value as VideoSubtitleStyle;
-                  setSubtitleStyle(next);
-                  onUpdateVideo({ ...video, subtitleStyle: next });
-                }}
-                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-              >
-                <option value="reels_bold">Reels বোল্ড সাবটাইটেল (Recommended)</option>
-                <option value="comic_bubble">ক্লাসিক কমিক স্পিচ বাবল</option>
-              </select>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between">
-                <label htmlFor="vid-duration" className="text-xs font-semibold text-slate-700">
-                  ভিডিওর লক্ষ্যমাত্রা সময়
-                </label>
-                <span className="font-mono-tabular text-xs font-bold text-slate-900">
-                  {targetDurationSec} সেকেন্ড
-                </span>
-              </div>
-              <input
-                id="vid-duration"
-                type="range"
-                min={storyArc === 'viral_story' ? 18 : 8}
-                max={storyArc === 'viral_story' ? 40 : 15}
-                step={1}
-                value={targetDurationSec}
-                onChange={(e) => setTargetDurationSec(Number(e.target.value))}
-                className="mt-2 w-full accent-slate-900"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="vid-hint" className="block text-xs font-semibold text-slate-700">
-                গল্পের আইডিয়া (ঐচ্ছিক — ফাঁকা রাখলেও AI নিজেই বানাবে)
-              </label>
-              <input
-                id="vid-hint"
-                type="text"
-                value={customHint}
-                onChange={(e) => setCustomHint(e.target.value)}
-                placeholder="যেমন: বন্ধু ছাতা নিয়ে হাসল, পরে মরুভূমিতে বিপদে..."
-                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={handleGenerateVideo}
-              disabled={isGenerating || isSynthesizingVoice}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
-            >
-              <Wand2 className="h-4 w-4" />
-              <span>
-                {isSynthesizingVoice
-                  ? 'বাংলা AI ভয়েস ও লিপ-সিঙ্ক হচ্ছে...'
-                  : isGenerating
-                    ? 'AI গল্প ও দৃশ্য বানাচ্ছে...'
-                    : 'নতুন অটো AI ভয়েস কার্টুন বানান'}
-              </span>
-            </button>
-          </div>
-        </div>
-
-        {/* Scene Timeline & Dialogue Editor */}
-        <div className="rounded-xl border border-slate-200 bg-white p-6">
-          <button
-            type="button"
-            onClick={() => setShowSceneEditor((v) => !v)}
-            className="flex w-full items-center justify-between text-left"
-          >
-            <div>
-              <h3 className="font-display text-sm font-bold text-slate-900">
-                দৃশ্য, ক্যামেরা ও সংলাপ এডিটর (ঐচ্ছিক)
-              </h3>
-              <p className="text-xs text-slate-500">
-                প্রতিটি দৃশ্যের ব্যাকগ্রাউন্ড, জুম, সংলাপ ও সাউন্ড ইফেক্ট কাস্টমাইজ করুন
-              </p>
-            </div>
-            {showSceneEditor ? (
-              <ChevronUp className="h-4 w-4 text-slate-500" />
-            ) : (
-              <ChevronDown className="h-4 w-4 text-slate-500" />
-            )}
-          </button>
-
-          {showSceneEditor && activeScene && (
-            <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
-              <div className="flex flex-wrap gap-1.5">
-                {video.scenes.map((sc, idx) => (
-                  <button
-                    key={sc.sceneIndex}
-                    type="button"
-                    onClick={() => setActiveSceneIdx(idx)}
-                    className={`rounded-md px-3 py-1.5 text-xs font-semibold whitespace-nowrap ${
-                      activeSceneIdx === idx
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    দৃশ্য {idx + 1} ({sc.durationSec}s)
-                  </button>
-                ))}
+                  শর্ট মিম (~১৩ সে.)
+                </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700">
-                    দৃশ্যের থিম
-                  </label>
-                  <select
-                    value={activeScene.theme}
-                    onChange={(e) =>
-                      updateActiveScene({ theme: e.target.value as VideoTheme })
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
-                  >
-                    {THEME_OPTIONS.filter((t) => t.value !== 'auto').map((t) => (
-                      <option key={t.value} value={t.value}>
-                        {t.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700">
-                    ক্যামেরা মোশন
-                  </label>
-                  <select
-                    value={activeScene.camera}
-                    onChange={(e) =>
-                      updateActiveScene({ camera: e.target.value as VideoCamera })
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
-                  >
-                    {CAMERA_OPTIONS.map((c) => (
-                      <option key={c.value} value={c.value}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700">
-                    সাউন্ড ইফেক্ট (SFX)
-                  </label>
-                  <select
-                    value={activeScene.sfx}
-                    onChange={(e) =>
-                      updateActiveScene({ sfx: e.target.value as VideoSfx })
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
-                  >
-                    {SFX_OPTIONS.map((s) => (
-                      <option key={s.value} value={s.value}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700">
-                    সময় ({activeScene.durationSec}s)
-                  </label>
-                  <input
-                    type="range"
-                    min={2.5}
-                    max={9}
-                    step={0.5}
-                    value={activeScene.durationSec}
-                    onChange={(e) =>
-                      updateActiveScene({ durationSec: Number(e.target.value) })
-                    }
-                    className="mt-2.5 w-full accent-slate-900"
-                  />
-                </div>
-              </div>
-
-              {activeScene.characters.map((ch, ci) => (
-                <div
-                  key={`${ch.id}-${ci}`}
-                  className="space-y-2 border-t border-slate-100 pt-3"
+              <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAspectRatio('9:16');
+                    onUpdateVideo({ ...video, aspectRatio: '9:16' });
+                  }}
+                  className={`rounded-md px-2.5 py-1 text-xs font-semibold whitespace-nowrap ${
+                    aspectRatio === '9:16'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600'
+                  }`}
                 >
-                  <div className="text-xs font-bold text-slate-800">
-                    চরিত্র {ci + 1}: {ch.name}
-                  </div>
-                  <input
-                    type="text"
-                    value={ch.speech || ''}
-                    onChange={(e) => updateSceneChar(ci, { speech: e.target.value })}
-                    placeholder="সংলাপ (বা ফাঁকা রাখুন)..."
-                    className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-900"
-                  />
-                  <div className="grid grid-cols-2 gap-2">
-                    <select
-                      value={ch.action}
-                      onChange={(e) =>
-                        updateSceneChar(ci, { action: e.target.value as VideoAction })
-                      }
-                      className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900"
-                    >
-                      {ACTION_OPTIONS.map((a) => (
-                        <option key={a.value} value={a.value}>
-                          {a.label}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={ch.prop}
-                      onChange={(e) =>
-                        updateSceneChar(ci, { prop: e.target.value as VideoProp })
-                      }
-                      className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900"
-                    >
-                      {PROP_OPTIONS.map((p) => (
-                        <option key={p.value} value={p.value}>
-                          {p.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              ))}
+                  ৯:১৬ Reels/Shorts
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAspectRatio('1:1');
+                    onUpdateVideo({ ...video, aspectRatio: '1:1' });
+                  }}
+                  className={`rounded-md px-2.5 py-1 text-xs font-semibold whitespace-nowrap ${
+                    aspectRatio === '1:1'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  ১:১ বর্গাকার
+                </button>
+              </div>
 
               <button
                 type="button"
-                onClick={handleSynthesizeCurrentVideo}
-                disabled={isSynthesizingVoice}
-                className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-100 disabled:opacity-50"
+                onClick={() => setDialogueMode(dialogueMode === 'bangla' ? 'silent' : 'bangla')}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap"
               >
-                {isSynthesizingVoice
-                  ? 'ভয়েস আপডেট হচ্ছে...'
-                  : 'এডিট করা সংলাপে বাংলা ভয়েস রি-জেনারেট করুন'}
+                {dialogueMode === 'bangla' ? 'কথা বলবে (বাংলা ডাবিং)' : 'নীরব স্ল্যাপস্টিক'}
               </button>
             </div>
-          )}
+
+            <div className="mt-3 flex flex-col gap-2.5 sm:flex-row">
+              <input
+                type="text"
+                value={customHint}
+                onChange={(e) => setCustomHint(e.target.value)}
+                placeholder="আপনার গল্পের আইডিয়া লিখুন (যেমন: মেসের বাথরুমে বন্ধু আটকা, পরীক্ষার হলে নকল ধরা...)"
+                className="flex-1 rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400"
+              />
+              <button
+                type="button"
+                onClick={handleAutoGenerate}
+                disabled={isGenerating || isSynthesizingVoices}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60 whitespace-nowrap shrink-0"
+              >
+                <Wand2 className="h-4 w-4" />
+                <span>
+                  {isGenerating
+                    ? 'স্ক্রিপ্ট তৈরি হচ্ছে...'
+                    : isSynthesizingVoices
+                      ? 'ডাবিং হচ্ছে...'
+                      : 'অটো ভিডিও বানান'}
+                </span>
+              </button>
+            </div>
+          </section>
+
+          {/* Starter Templates & Recent Projects Strip */}
+          <section className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-bold text-slate-900">
+                প্রজেক্ট ও রেডি টেমপ্লেট ({videos.length})
+              </h2>
+              <span className="text-xs text-slate-500">স্বয়ংক্রিয়ভাবে সেইভ থাকে</span>
+            </div>
+            <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+              {videos.map((item) => {
+                const active = item.id === video.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onSelectVideo(item)}
+                    className={`shrink-0 rounded-lg border px-3 py-2 text-left transition-colors ${
+                      active
+                        ? 'border-slate-900 bg-slate-900 text-white'
+                        : 'border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="max-w-[190px] truncate text-xs font-bold">{item.title}</div>
+                    <div
+                      className={`mt-0.5 font-mono-tabular text-[11px] ${
+                        active ? 'text-slate-300' : 'text-slate-500'
+                      }`}
+                    >
+                      {item.renderStyle === 'cartoon_2d' ? '2D' : 'Stick'} · {item.scenes.length}{' '}
+                      দৃশ্য · {item.totalDurationSec}s
+                    </div>
+                  </button>
+                );
+              })}
+              {STARTER_VIDEOS.filter((sv) => !videos.some((v) => v.id === sv.id)).map((sv) => (
+                <button
+                  key={sv.id}
+                  type="button"
+                  onClick={() => onSelectVideo(sv)}
+                  className="shrink-0 rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-left text-slate-700 hover:bg-slate-50"
+                >
+                  <div className="max-w-[190px] truncate text-xs font-bold">{sv.title}</div>
+                  <div className="mt-0.5 text-[11px] text-slate-500">টেমপ্লেট খুলুন</div>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* Top Hook Banner & Scene Storyboard Editor */}
+          <section className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-base font-bold text-slate-900">২. দৃশ্য, অ্যাকশন ও ডাবিং এডিটর</h2>
+              <button
+                type="button"
+                onClick={() => handleSynthesizeVoicesForScript(video)}
+                disabled={isSynthesizingVoices}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
+              >
+                <Mic className="h-3.5 w-3.5" />
+                <span>{isSynthesizingVoices ? 'ডাবিং হচ্ছে...' : 'ডাবিং রিজেনারেট করুন'}</span>
+              </button>
+            </div>
+
+            {/* Viral Hook Banner Input */}
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  ওপরের ভাইরাল হুক বক্স (Hook Text)
+                </label>
+                <input
+                  type="text"
+                  value={video.hookBanner ?? video.title}
+                  onChange={(e) =>
+                    onUpdateVideo({
+                      ...video,
+                      hookBanner: e.target.value,
+                      title: e.target.value || video.title,
+                    })
+                  }
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-900"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  সাবটাইটেল স্টাইল
+                </label>
+                <select
+                  value={video.subtitleStyle || subtitleStyle}
+                  onChange={(e) => {
+                    const val = e.target.value as VideoSubtitleStyle;
+                    setSubtitleStyle(val);
+                    onUpdateVideo({ ...video, subtitleStyle: val });
+                  }}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                >
+                  <option value="meme_clean">ক্লিন মিম সাবটাইটেল (ভিডিওর মতো)</option>
+                  <option value="reels_bold">বোল্ড কালো বক্স Reels</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Scenes Accordion */}
+            <div className="mt-4 space-y-2.5">
+              {video.scenes.map((sc, sIdx) => {
+                const isOpen = expandedScene === sIdx;
+                const isActivePlaying = isPlaying && currentSceneInfo.sceneIndex === sIdx;
+                return (
+                  <div
+                    key={sIdx}
+                    className={`rounded-lg border ${
+                      isActivePlaying ? 'border-slate-900 bg-slate-50' : 'border-slate-200 bg-white'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setExpandedScene(isOpen ? null : sIdx)}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                    >
+                      <div className="min-w-0">
+                        <span className="text-xs font-bold text-slate-900">
+                          দৃশ্য {sIdx + 1}: {sc.captionTop || sc.theme}
+                        </span>
+                        <span className="ml-2 font-mono-tabular text-xs text-slate-500">
+                          {sc.durationSec}s · {sc.splitScreen ? 'স্প্লিট-স্ক্রিন' : 'সিঙ্গেল'} · {sc.sfx}
+                        </span>
+                      </div>
+                      {isOpen ? (
+                        <ChevronUp className="h-4 w-4 shrink-0 text-slate-500" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" />
+                      )}
+                    </button>
+
+                    {isOpen && (
+                      <div className="border-t border-slate-200 p-4 space-y-4">
+                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                              থিম / রুম
+                            </label>
+                            <select
+                              value={sc.theme}
+                              onChange={(e) => {
+                                const next = video.scenes.map((item, i) =>
+                                  i === sIdx ? { ...item, theme: e.target.value as VideoTheme } : item
+                                );
+                                onUpdateVideo({ ...video, scenes: next });
+                              }}
+                              className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+                            >
+                              {THEME_OPTIONS.filter((o) => o.value !== 'auto').map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                              ক্যামেরা
+                            </label>
+                            <select
+                              value={sc.camera}
+                              onChange={(e) => {
+                                const next = video.scenes.map((item, i) =>
+                                  i === sIdx
+                                    ? { ...item, camera: e.target.value as VideoCamera }
+                                    : item
+                                );
+                                onUpdateVideo({ ...video, scenes: next });
+                              }}
+                              className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+                            >
+                              {CAMERA_OPTIONS.map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                              সাউন্ড ইফেক্ট (কপিরাইট-ফ্রি)
+                            </label>
+                            <select
+                              value={sc.sfx}
+                              onChange={(e) => {
+                                const next = video.scenes.map((item, i) =>
+                                  i === sIdx ? { ...item, sfx: e.target.value as VideoSfx } : item
+                                );
+                                onUpdateVideo({ ...video, scenes: next });
+                              }}
+                              className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+                            >
+                              {SFX_OPTIONS.map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                              সময় (সেকেন্ড)
+                            </label>
+                            <input
+                              type="number"
+                              min={2}
+                              max={12}
+                              step={0.5}
+                              value={sc.durationSec}
+                              onChange={(e) => {
+                                const val = Math.max(2, Math.min(12, Number(e.target.value) || 4));
+                                const next = video.scenes.map((item, i) =>
+                                  i === sIdx ? { ...item, durationSec: val } : item
+                                );
+                                const nextTotal = Number(
+                                  next.reduce((a, b) => a + b.durationSec, 0).toFixed(1)
+                                );
+                                onUpdateVideo({
+                                  ...video,
+                                  scenes: next,
+                                  totalDurationSec: nextTotal,
+                                });
+                              }}
+                              className="w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono-tabular text-xs"
+                            />
+                          </div>
+                        </div>
+
+                        <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(sc.splitScreen)}
+                            onChange={(e) => {
+                              const next = video.scenes.map((item, i) =>
+                                i === sIdx ? { ...item, splitScreen: e.target.checked } : item
+                              );
+                              onUpdateVideo({ ...video, scenes: next });
+                            }}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                          <span>স্প্লিট-স্ক্রিন (দুই পর্দায় দুই চরিত্র)</span>
+                        </label>
+
+                        {/* Characters inside scene */}
+                        <div className="space-y-3">
+                          {sc.characters.map((ch, cIdx) => {
+                            const recKey = `${sIdx}-${cIdx}`;
+                            const isMicOn = recordingKey === recKey;
+                            return (
+                              <div
+                                key={cIdx}
+                                className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2.5"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="text-xs font-bold text-slate-900">
+                                    চরিত্র {cIdx + 1}: {ch.name} ({ch.side})
+                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleMicRecording(sIdx, cIdx)}
+                                      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold ${
+                                        isMicOn
+                                          ? 'bg-red-600 text-white'
+                                          : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                                      }`}
+                                    >
+                                      {isMicOn ? (
+                                        <>
+                                          <Square className="h-3 w-3" />
+                                          <span>থামান</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Mic className="h-3 w-3" />
+                                          <span>নিজের ভয়েস দিন</span>
+                                        </>
+                                      )}
+                                    </button>
+                                    <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100">
+                                      <Upload className="h-3 w-3" />
+                                      <span>MP3 দিন</span>
+                                      <input
+                                        type="file"
+                                        accept="audio/*"
+                                        className="hidden"
+                                        onChange={(e) =>
+                                          handleUploadCustomAudio(sIdx, cIdx, e.target.files?.[0])
+                                        }
+                                      />
+                                    </label>
+                                    {ch.customAudioDataUrl && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const next = video.scenes.map((item, i) =>
+                                            i === sIdx
+                                              ? {
+                                                  ...item,
+                                                  characters: item.characters.map((cc, j) =>
+                                                    j === cIdx
+                                                      ? { ...cc, customAudioDataUrl: undefined }
+                                                      : cc
+                                                  ),
+                                                }
+                                              : item
+                                          );
+                                          onUpdateVideo({ ...video, scenes: next });
+                                        }}
+                                        className="text-[11px] font-semibold text-red-600 hover:underline"
+                                      >
+                                        কাস্টম অডিও সরান
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                  <select
+                                    value={ch.action}
+                                    onChange={(e) => {
+                                      const next = video.scenes.map((item, i) =>
+                                        i === sIdx
+                                          ? {
+                                              ...item,
+                                              characters: item.characters.map((cc, j) =>
+                                                j === cIdx
+                                                  ? { ...cc, action: e.target.value as VideoAction }
+                                                  : cc
+                                              ),
+                                            }
+                                          : item
+                                      );
+                                      onUpdateVideo({ ...video, scenes: next });
+                                    }}
+                                    className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs"
+                                  >
+                                    {ACTION_OPTIONS.map((o) => (
+                                      <option key={o.value} value={o.value}>
+                                        অ্যাকশন: {o.label}
+                                      </option>
+                                    ))}
+                                  </select>
+
+                                  <select
+                                    value={ch.prop}
+                                    onChange={(e) => {
+                                      const next = video.scenes.map((item, i) =>
+                                        i === sIdx
+                                          ? {
+                                              ...item,
+                                              characters: item.characters.map((cc, j) =>
+                                                j === cIdx
+                                                  ? { ...cc, prop: e.target.value as VideoProp }
+                                                  : cc
+                                              ),
+                                            }
+                                          : item
+                                      );
+                                      onUpdateVideo({ ...video, scenes: next });
+                                    }}
+                                    className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs"
+                                  >
+                                    {PROP_OPTIONS.map((o) => (
+                                      <option key={o.value} value={o.value}>
+                                        প্রপ: {o.label}
+                                      </option>
+                                    ))}
+                                  </select>
+
+                                  <select
+                                    value={ch.voiceEffect || 'normal'}
+                                    onChange={(e) => {
+                                      const next = video.scenes.map((item, i) =>
+                                        i === sIdx
+                                          ? {
+                                              ...item,
+                                              characters: item.characters.map((cc, j) =>
+                                                j === cIdx
+                                                  ? {
+                                                      ...cc,
+                                                      voiceEffect: e.target
+                                                        .value as VoiceEffectPreset,
+                                                    }
+                                                  : cc
+                                              ),
+                                            }
+                                          : item
+                                      );
+                                      onUpdateVideo({ ...video, scenes: next });
+                                    }}
+                                    className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs"
+                                  >
+                                    {VOICE_EFFECT_OPTIONS.map((o) => (
+                                      <option key={o.value} value={o.value}>
+                                        ভয়েস FX: {o.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <input
+                                  type="text"
+                                  value={ch.speech || ''}
+                                  onChange={(e) => {
+                                    const next = video.scenes.map((item, i) =>
+                                      i === sIdx
+                                        ? {
+                                            ...item,
+                                            characters: item.characters.map((cc, j) =>
+                                              j === cIdx ? { ...cc, speech: e.target.value } : cc
+                                            ),
+                                          }
+                                        : item
+                                    );
+                                    onUpdateVideo({ ...video, scenes: next });
+                                  }}
+                                  placeholder="বাংলা ডায়লগ লিখুন..."
+                                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900"
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+
+        {/* RIGHT: Live 9:16 Video Preview + Render & Save */}
+        <div className="space-y-5 lg:col-span-5">
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-bold text-slate-900">লাইভ প্রিভিউ ও MP4 রেন্ডার</h2>
+              <span className="font-mono-tabular text-xs text-slate-500">
+                {elapsedSec.toFixed(1)}s / {totalDuration.toFixed(1)}s
+              </span>
+            </div>
+
+            <div className="mt-3 flex justify-center rounded-xl border border-slate-200 bg-slate-100 p-3">
+              <canvas
+                ref={canvasRef}
+                className={`rounded-lg border border-slate-300 bg-white shadow-sm ${
+                  video.aspectRatio === '1:1'
+                    ? 'aspect-square w-full max-w-[340px]'
+                    : 'aspect-[9/16] max-h-[500px] w-auto'
+                }`}
+              />
+            </div>
+
+            {/* Scrubber */}
+            <input
+              type="range"
+              min={0}
+              max={Math.max(1, totalDuration)}
+              step={0.1}
+              value={elapsedSec}
+              onChange={(e) => {
+                stopPlayback();
+                setElapsedSec(Number(e.target.value));
+              }}
+              className="mt-3 w-full accent-slate-900"
+            />
+
+            {/* Player Controls */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => (isPlaying ? stopPlayback() : startPlayback(elapsedSec))}
+                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap"
+              >
+                {isPlaying ? (
+                  <>
+                    <Pause className="h-3.5 w-3.5" />
+                    <span>বিরতি</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-3.5 w-3.5" />
+                    <span>প্লে করুন</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => startPlayback(0)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>শুরু</span>
+              </button>
+            </div>
+
+            {/* Render & Permanent Save CTA */}
+            <div className="mt-4 border-t border-slate-100 pt-4 space-y-2.5">
+              <button
+                type="button"
+                onClick={handleRenderAndSave}
+                disabled={isRecording || isGenerating}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                <Save className="h-4 w-4" />
+                <span>
+                  {isRecording
+                    ? `${renderStage} (${renderPct}%)`
+                    : 'ভিডিও রেন্ডার ও স্থায়ীভাবে সেইভ করুন (MP4)'}
+                </span>
+              </button>
+
+              {isRecording && (
+                <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full bg-emerald-600 transition-all"
+                    style={{ width: `${renderPct}%` }}
+                  />
+                </div>
+              )}
+
+              {lastRendered && (
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleDownloadBlob(
+                        lastRendered.blob,
+                        `rafu-folk-${Date.now()}.${lastRendered.extension}`
+                      )
+                    }
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>MP4 ডাউনলোড</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isPublishing || (!settings.pageAccessToken && !settings.webhookUrl)}
+                    onClick={async () => {
+                      setIsPublishing(true);
+                      try {
+                        await onPublishVideo(video, lastRendered);
+                        setStatusMsg({
+                          type: 'ok',
+                          text: 'ভিডিও Facebook Page-এ সফলভাবে পোস্ট হয়েছে!',
+                        });
+                      } catch (err) {
+                        setStatusMsg({
+                          type: 'err',
+                          text: err instanceof Error ? err.message : 'Facebook পোস্ট ব্যর্থ হয়েছে।',
+                        });
+                      } finally {
+                        setIsPublishing(false);
+                      }
+                    }}
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-700 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-800 disabled:opacity-50"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    <span>{isPublishing ? 'পোস্ট হচ্ছে...' : 'Facebook-এ পোস্ট'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Facebook Caption Copy Box */}
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-700">Facebook / Reels ক্যাপশন</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(video.fbCaption || '');
+                    setCopiedCaption(true);
+                    setTimeout(() => setCopiedCaption(false), 1800);
+                  }}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900"
+                >
+                  {copiedCaption ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  <span>{copiedCaption ? 'কপি হয়েছে' : 'কপি'}</span>
+                </button>
+              </div>
+              <textarea
+                rows={2}
+                value={video.fbCaption}
+                onChange={(e) => onUpdateVideo({ ...video, fbCaption: e.target.value })}
+                className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800"
+              />
+            </div>
+          </div>
+
+          {/* Saved Rendered Videos Vault Panel */}
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                <Film className="h-4 w-4 text-slate-700" />
+                <span>সংরক্ষিত ভিডিও গ্যালারি ({savedRenderedVideos.length})</span>
+              </h2>
+              <span className="text-xs text-slate-500">রিলোড করলেও থাকবে</span>
+            </div>
+
+            {playingSavedUrl && (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-900 p-2.5">
+                <div className="mb-1.5 flex items-center justify-between text-xs font-semibold text-white">
+                  <span className="truncate">{playingSavedUrl.title}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPlayingSavedUrl(null)}
+                    className="text-slate-300 hover:text-white"
+                  >
+                    বন্ধ করুন
+                  </button>
+                </div>
+                <video
+                  src={playingSavedUrl.url}
+                  controls
+                  autoPlay
+                  className="max-h-[340px] w-full rounded bg-black"
+                />
+              </div>
+            )}
+
+            {savedRenderedVideos.length === 0 ? (
+              <div className="mt-3 rounded-lg border border-dashed border-slate-200 p-4 text-center text-xs text-slate-500">
+                এখনো কোনো রেন্ডার করা ভিডিও সেইভ করা হয়নি। ওপরের{' '}
+                <strong>"ভিডিও রেন্ডার ও স্থায়ীভাবে সেইভ করুন"</strong> বাটনে চাপ দিলে এখানে স্থায়ীভাবে জমা হবে।
+              </div>
+            ) : (
+              <div className="mt-3 space-y-2 max-h-[280px] overflow-y-auto pr-1">
+                {savedRenderedVideos.map((sv) => (
+                  <div
+                    key={sv.id}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-bold text-slate-900">{sv.title}</div>
+                      <div className="font-mono-tabular text-[11px] text-slate-500">
+                        {sv.durationSec.toFixed(1)}s · {(sv.sizeBytes / (1024 * 1024)).toFixed(2)} MB ·{' '}
+                        {sv.aspectRatio}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handlePlaySavedItem(sv)}
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-100"
+                      >
+                        <Volume2 className="h-3.5 w-3.5" />
+                        <span>দেখুন</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadSavedItem(sv)}
+                        title="MP4 ডাউনলোড"
+                        className="rounded-md border border-slate-300 bg-white p-1.5 text-slate-700 hover:bg-slate-100"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteSavedRenderedVideo(sv.id)}
+                        title="মুছে ফেলুন"
+                        className="rounded-md border border-slate-300 bg-white p-1.5 text-slate-500 hover:border-red-200 hover:text-red-600"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

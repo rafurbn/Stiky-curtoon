@@ -1,217 +1,366 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import {
   CheckCircle2,
-  AlertCircle,
   Clock,
   Download,
+  Eye,
+  Film,
+  Image as ImageIcon,
+  Play,
   Send,
   Trash2,
-  Eye,
-  Search,
 } from 'lucide-react';
-import type { ComicItem, PostStatus } from '../types/comic';
+import type { ComicItem, SavedRenderedVideo, VideoItem } from '../types/comic';
+import { getRenderedVideoBlobFromVault } from '../lib/videoStorage';
 
 interface HistoryQueueViewProps {
   comics: ComicItem[];
-  onSelectComic: (comic: ComicItem) => void;
-  onPublishComic: (comic: ComicItem) => Promise<void>;
-  onDownloadComic: (comic: ComicItem) => Promise<void>;
-  onDeleteComic: (id: string) => void;
+  videos: VideoItem[];
+  savedRenderedVideos: SavedRenderedVideo[];
   publishingId: string | null;
+  onSelectComic: (comic: ComicItem) => void;
+  onSelectVideo: (video: VideoItem) => void;
+  onPublishComic: (comic: ComicItem) => void;
+  onDownloadComic: (comic: ComicItem) => void;
+  onDeleteComic: (id: string) => void;
+  onDeleteVideoProject: (id: string) => void;
+  onDeleteSavedRenderedVideo: (id: string) => Promise<void>;
 }
 
 export function HistoryQueueView({
   comics,
+  videos,
+  savedRenderedVideos,
+  publishingId,
   onSelectComic,
+  onSelectVideo,
   onPublishComic,
   onDownloadComic,
   onDeleteComic,
-  publishingId,
+  onDeleteVideoProject,
+  onDeleteSavedRenderedVideo,
 }: HistoryQueueViewProps) {
-  const [filter, setFilter] = useState<'all' | PostStatus>('all');
-  const [query, setQuery] = useState('');
+  const [activeSubTab, setActiveSubTab] = useState<'saved_mp4' | 'video_projects' | 'comics'>(
+    'saved_mp4'
+  );
+  const [previewVideo, setPreviewVideo] = useState<{ title: string; url: string } | null>(null);
 
-  const filtered = useMemo(() => {
-    return comics.filter((c) => {
-      if (filter !== 'all' && c.status !== filter) return false;
-      if (query.trim()) {
-        const q = query.trim().toLowerCase();
-        return (
-          c.title.toLowerCase().includes(q) ||
-          c.category.toLowerCase().includes(q) ||
-          c.fbCaption.toLowerCase().includes(q)
-        );
-      }
-      return true;
-    });
-  }, [comics, filter, query]);
+  const handlePlaySaved = async (item: SavedRenderedVideo) => {
+    const blob = await getRenderedVideoBlobFromVault(item.id);
+    if (blob) {
+      setPreviewVideo({ title: item.title, url: URL.createObjectURL(blob) });
+      return;
+    }
+    if (item.serverUrl) {
+      setPreviewVideo({ title: item.title, url: item.serverUrl });
+    }
+  };
 
-  const renderStatus = (status: PostStatus) => {
+  const handleDownloadSaved = async (item: SavedRenderedVideo) => {
+    const blob = await getRenderedVideoBlobFromVault(item.id);
+    const ext = item.mimeType?.includes('mp4') ? 'mp4' : 'webm';
+    if (blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${item.id}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      return;
+    }
+    if (item.serverUrl) {
+      const a = document.createElement('a');
+      a.href = `${item.serverUrl}?download=1`;
+      a.download = `${item.id}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  };
+
+  const renderStatus = (status: ComicItem['status']) => {
     if (status === 'published') {
       return (
-        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
+        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
           <CheckCircle2 className="h-3.5 w-3.5" />
           <span>প্রকাশিত</span>
         </span>
       );
     }
-    if (status === 'failed') {
-      return (
-        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-red-700">
-          <AlertCircle className="h-3.5 w-3.5" />
-          <span>ব্যর্থ</span>
-        </span>
-      );
-    }
     if (status === 'scheduled') {
       return (
-        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700">
+        <span className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700">
           <Clock className="h-3.5 w-3.5" />
           <span>শিডিউলড</span>
         </span>
       );
     }
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-        <Clock className="h-3.5 w-3.5" />
-        <span>ড্রাফট</span>
-      </span>
-    );
+    return <span className="text-xs font-medium text-slate-500">ড্রাফট</span>;
   };
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white">
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-6 py-4">
-        <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
-          {(
-            [
-              { id: 'all', label: 'সব' },
-              { id: 'scheduled', label: 'শিডিউলড' },
-              { id: 'published', label: 'প্রকাশিত' },
-              { id: 'draft', label: 'ড্রাফট' },
-              { id: 'failed', label: 'ব্যর্থ' },
-            ] as const
-          ).map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setFilter(tab.id)}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                filter === tab.id
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-slate-900">
+            সংরক্ষিত ভিডিও ও কার্টুন আর্কাইভ
+          </h1>
+          <p className="mt-1 text-sm text-slate-600">
+            রেন্ডার করা সব MP4 ভিডিও, ভিডিও প্রজেক্ট ও কমিক স্ট্রিপ এখানে স্থায়ীভাবে সংরক্ষিত থাকে।
+          </p>
         </div>
 
-        <div className="relative w-full sm:w-64">
-          <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="কার্টুন খুঁজুন..."
-            className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pr-3 pl-9 text-sm text-slate-900 focus:border-blue-600 focus:bg-white focus:outline-none"
-          />
+        <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('saved_mp4')}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold whitespace-nowrap ${
+              activeSubTab === 'saved_mp4'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Film className="h-3.5 w-3.5" />
+            <span>সেইভ করা MP4 ({savedRenderedVideos.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('video_projects')}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold whitespace-nowrap ${
+              activeSubTab === 'video_projects'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            ভিডিও প্রজেক্ট ({videos.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('comics')}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold whitespace-nowrap ${
+              activeSubTab === 'comics'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <ImageIcon className="h-3.5 w-3.5" />
+            <span>কমিক ছবি ({comics.length})</span>
+          </button>
         </div>
       </div>
 
-      {filtered.length === 0 ? (
-        <div className="px-6 py-16 text-center">
-          <p className="text-sm font-semibold text-slate-800">
-            কোনো কার্টুন পাওয়া যায়নি
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            স্টুডিও থেকে নতুন স্টিক কার্টুন তৈরি করলে এখানে তার তালিকা জমা থাকবে।
-          </p>
+      {previewVideo && (
+        <div className="rounded-xl border border-slate-200 bg-slate-900 p-4">
+          <div className="mb-2 flex items-center justify-between text-sm font-semibold text-white">
+            <span>{previewVideo.title}</span>
+            <button
+              type="button"
+              onClick={() => setPreviewVideo(null)}
+              className="rounded-md bg-slate-800 px-3 py-1 text-xs text-slate-200 hover:bg-slate-700"
+            >
+              বন্ধ করুন
+            </button>
+          </div>
+          <video
+            src={previewVideo.url}
+            controls
+            autoPlay
+            className="mx-auto max-h-[460px] rounded-lg bg-black"
+          />
         </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-left text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-slate-600">
-                <th className="px-6 py-3">শিরোনাম ও বিষয়</th>
-                <th className="px-4 py-3">লেআউট</th>
-                <th className="px-4 py-3">অবস্থা</th>
-                <th className="px-4 py-3">সময়</th>
-                <th className="px-6 py-3 text-right">অ্যাকশন</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map((item) => (
-                <tr key={item.id} className="hover:bg-slate-50/70 transition-colors">
-                  <td className="px-6 py-3.5">
-                    <div className="font-semibold text-slate-900">{item.title}</div>
-                    <div className="mt-0.5 text-xs text-slate-500">
-                      {item.category}
-                      {item.fbPostId ? ` · Post ID: ${item.fbPostId}` : ''}
-                      {item.errorMessage ? ` · ${item.errorMessage}` : ''}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3.5 font-mono-tabular text-xs text-slate-600 whitespace-nowrap">
-                    {item.layout}
-                  </td>
-                  <td className="px-4 py-3.5 whitespace-nowrap">
-                    {renderStatus(item.status)}
-                  </td>
-                  <td className="px-4 py-3.5 font-mono-tabular text-xs text-slate-500 whitespace-nowrap">
-                    {new Date(
-                      item.publishedAt || item.scheduledFor || item.createdAt
-                    ).toLocaleString('bn-BD', {
-                      timeZone: 'Asia/Dhaka',
-                      month: 'short',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      hour12: true,
-                    })}
-                  </td>
-                  <td className="px-6 py-3.5 text-right whitespace-nowrap">
-                    <div className="inline-flex items-center justify-end gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => onSelectComic(item)}
-                        title="স্টুডিওতে দেখুন"
-                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        <Eye className="h-3.5 w-3.5" />
-                        <span>দেখুন</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onDownloadComic(item)}
-                        title="PNG ডাউনলোড"
-                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onPublishComic(item)}
-                        disabled={publishingId === item.id}
-                        title="Facebook Page-এ পোস্ট"
-                        className="inline-flex items-center gap-1 rounded-md bg-blue-700 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:opacity-50"
-                      >
-                        <Send className="h-3.5 w-3.5" />
-                        <span>{publishingId === item.id ? 'হচ্ছে...' : 'পোস্ট'}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onDeleteComic(item.id)}
-                        title="মুছে ফেলুন"
-                        className="inline-flex items-center rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-red-200 hover:text-red-600"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </td>
+      )}
+
+      {activeSubTab === 'saved_mp4' && (
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          {savedRenderedVideos.length === 0 ? (
+            <div className="p-10 text-center text-sm text-slate-500">
+              এখনো কোনো MP4 ভিডিও সেইভ হয়নি। ভিডিও স্টুডিও থেকে{' '}
+              <strong>"ভিডিও রেন্ডার ও স্থায়ীভাবে সেইভ করুন"</strong> বাটন চাপুন।
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
+                  <tr>
+                    <th className="px-6 py-3">ভিডিওর নাম</th>
+                    <th className="px-4 py-3">স্টাইল</th>
+                    <th className="px-4 py-3">সময় ও সাইজ</th>
+                    <th className="px-4 py-3">তৈরির সময়</th>
+                    <th className="px-6 py-3 text-right">অ্যাকশন</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {savedRenderedVideos.map((item) => (
+                    <tr key={item.id} className="hover:bg-slate-50">
+                      <td className="px-6 py-3.5 font-semibold text-slate-900">{item.title}</td>
+                      <td className="px-4 py-3.5 text-xs text-slate-600">
+                        {item.renderStyle === 'cartoon_2d' ? '২ডি রঙিন' : 'স্টিক ফিগার মিম'} ·{' '}
+                        {item.aspectRatio}
+                      </td>
+                      <td className="px-4 py-3.5 font-mono-tabular text-xs text-slate-600">
+                        {item.durationSec.toFixed(1)}s ·{' '}
+                        {(item.sizeBytes / (1024 * 1024)).toFixed(2)} MB
+                      </td>
+                      <td className="px-4 py-3.5 font-mono-tabular text-xs text-slate-500">
+                        {new Date(item.createdAt).toLocaleString('bn-BD', {
+                          timeZone: 'Asia/Dhaka',
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </td>
+                      <td className="px-6 py-3.5 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handlePlaySaved(item)}
+                            className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                            <span>প্লে</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadSaved(item)}
+                            className="inline-flex items-center gap-1 rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            <span>ডাউনলোড</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDeleteSavedRenderedVideo(item.id)}
+                            className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-red-200 hover:text-red-600"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeSubTab === 'video_projects' && (
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
+                <tr>
+                  <th className="px-6 py-3">প্রজেক্ট</th>
+                  <th className="px-4 py-3">দৃশ্য</th>
+                  <th className="px-4 py-3">স্ট্যাটাস</th>
+                  <th className="px-6 py-3 text-right">অ্যাকশন</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {videos.map((v) => (
+                  <tr key={v.id} className="hover:bg-slate-50">
+                    <td className="px-6 py-3.5">
+                      <div className="font-semibold text-slate-900">{v.title}</div>
+                      <div className="text-xs text-slate-500">{v.category}</div>
+                    </td>
+                    <td className="px-4 py-3.5 font-mono-tabular text-xs text-slate-600">
+                      {v.scenes.length} দৃশ্য · {v.totalDurationSec}s
+                    </td>
+                    <td className="px-4 py-3.5">{renderStatus(v.status)}</td>
+                    <td className="px-6 py-3.5 text-right whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onSelectVideo(v)}
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          <span>স্টুডিওতে খুলুন</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteVideoProject(v.id)}
+                          className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-red-200 hover:text-red-600"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === 'comics' && (
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
+                <tr>
+                  <th className="px-6 py-3">কমিক</th>
+                  <th className="px-4 py-3">লেআউট</th>
+                  <th className="px-4 py-3">স্ট্যাটাস</th>
+                  <th className="px-6 py-3 text-right">অ্যাকশন</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {comics.map((item) => (
+                  <tr key={item.id} className="hover:bg-slate-50">
+                    <td className="px-6 py-3.5">
+                      <div className="font-semibold text-slate-900">{item.title}</div>
+                      <div className="text-xs text-slate-500">{item.category}</div>
+                    </td>
+                    <td className="px-4 py-3.5 font-mono-tabular text-xs text-slate-600">
+                      {item.layout}
+                    </td>
+                    <td className="px-4 py-3.5">{renderStatus(item.status)}</td>
+                    <td className="px-6 py-3.5 text-right whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onSelectComic(item)}
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          <span>দেখুন</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDownloadComic(item)}
+                          className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-700 hover:bg-slate-50"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onPublishComic(item)}
+                          disabled={publishingId === item.id}
+                          className="inline-flex items-center gap-1 rounded-md bg-blue-700 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:opacity-50"
+                        >
+                          <Send className="h-3.5 w-3.5" />
+                          <span>পোস্ট</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteComic(item.id)}
+                          className="rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-red-200 hover:text-red-600"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

@@ -1,6 +1,6 @@
 {
-  "name": "@@RAFU FOLK@@ AI Cartoon & Reels Studio",
-  "description": "Free automated Bengali AI cartoon and viral Reels video generator with neural voiceover, 2D layered animation, FFmpeg MP4 export, and Facebook Page auto-posting.",
-  "requestFramePermissions": [],
+  "name": "@@RAFU FOLK@@ Stick-Meme & Cartoon Studio",
+  "description": "100% Copyright-free Bengali Stick-Figure Meme & 2D AI Cartoon Reels generator with automatic dramatic voice dubbing, persistent MP4 saving, and Facebook auto-posting.",
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

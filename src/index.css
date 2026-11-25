@@ -1,24 +1,16 @@
 @import "tailwindcss";
 
 @layer base {
-  :root {
-    --font-sans: "Hind Siliguri", "Plus Jakarta Sans", "Noto Sans Bengali", system-ui, sans-serif;
-    --font-display: "Plus Jakarta Sans", "Hind Siliguri", "Noto Sans Bengali", system-ui, sans-serif;
-    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  }
-
   body {
-    font-family: var(--font-sans);
-    background-color: #f8fafc;
-    color: #0f172a;
+    font-family: 'Plus Jakarta Sans', 'Hind Siliguri', system-ui, -apple-system, sans-serif;
   }
 }
 
 .font-display {
-  font-family: var(--font-display);
+  font-family: 'Plus Jakarta Sans', 'Hind Siliguri', system-ui, sans-serif;
 }
 
 .font-mono-tabular {
-  font-family: var(--font-mono);
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
   font-variant-numeric: tabular-nums;
 }

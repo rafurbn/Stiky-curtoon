@@ -1,28 +1,36 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Archive,
   Film,
-  History,
   LayoutGrid,
-  Send,
+  Palette,
   Share2,
-  Stamp,
   Wand2,
 } from 'lucide-react';
 import type {
   AutomationSettings,
   ComicItem,
   LayoutMode,
+  PublishLogEntry,
+  SavedRenderedVideo,
   VideoItem,
 } from './types/comic';
 import { STARTER_COMICS } from './lib/defaultComic';
 import { STARTER_VIDEOS } from './lib/defaultVideos';
 import { renderOffscreenPng } from './lib/cartoonRenderer';
+import type { RenderedVideoResult } from './lib/videoRenderer';
 import {
   computeUpcomingBdSlots,
   DEFAULT_BD_SLOTS,
-  formatBdTimeLabel,
+  getBdDateKey,
 } from './lib/scheduleHelper';
-import type { RenderedVideoResult } from './lib/videoRenderer';
+import {
+  deleteRenderedVideoFromVault,
+  listRenderedVideosFromVault,
+  loadVideoProjectsFromVault,
+  saveRenderedVideoToVault,
+  saveVideoProjectsToVault,
+} from './lib/videoStorage';
 import { RafuFolkLogo } from './components/RafuFolkLogo';
 import { StudioView } from './components/StudioView';
 import { VideoStudioView } from './components/VideoStudioView';
@@ -30,96 +38,76 @@ import { BrandingView } from './components/BrandingView';
 import { FacebookAutoView } from './components/FacebookAutoView';
 import { HistoryQueueView } from './components/HistoryQueueView';
 
-type NavTab = 'video' | 'studio' | 'branding' | 'automation' | 'history';
+type AppTab = 'video' | 'studio' | 'history' | 'branding' | 'automation';
 
-const STORAGE_COMICS_KEY = 'rafu_folk_comics_v1';
-const STORAGE_VIDEOS_KEY = 'rafu_folk_videos_v2';
-const STORAGE_SETTINGS_KEY = 'rafu_folk_settings_v2';
+const SETTINGS_KEY = 'rafu_folk_settings_v2';
+const COMICS_KEY = 'rafu_folk_comics_v2';
+const LOGS_KEY = 'rafu_folk_logs_v2';
 
 const DEFAULT_SETTINGS: AutomationSettings = {
   logoText: '@@RAFU FOLK@@',
   logoPlacement: 'bottom-right',
   logoStyle: 'stamp-dark',
-  logoOpacity: 0.94,
-  customLogoDataUrl: '',
+  logoOpacity: 0.55,
   pageId: '',
   pageAccessToken: '',
-  pageName: '',
   webhookUrl: '',
   autoPilotEnabled: false,
   intervalHours: 6,
-  randomJitterMinutes: 15,
+  randomJitterMinutes: 10,
   dailyCap: 3,
-  dailySlots: [...DEFAULT_BD_SLOTS],
+  dailySlots: DEFAULT_BD_SLOTS,
   timezone: 'Asia/Dhaka',
   useExactSlots: true,
   preferredCategory: 'auto',
   languageMode: 'bangla',
 };
 
-function loadInitialComics(): ComicItem[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_COMICS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {
-    // Ignore storage read error
-  }
-  return STARTER_COMICS;
-}
-
-function loadInitialVideos(): VideoItem[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_VIDEOS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {
-    // Ignore storage read error
-  }
-  return STARTER_VIDEOS;
-}
-
-function loadInitialSettings(): AutomationSettings {
-  try {
-    const raw = localStorage.getItem(STORAGE_SETTINGS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return {
-        ...DEFAULT_SETTINGS,
-        ...parsed,
-        dailySlots:
-          Array.isArray(parsed?.dailySlots) && parsed.dailySlots.length > 0
-            ? parsed.dailySlots
-            : [...DEFAULT_BD_SLOTS],
-      };
-    }
-  } catch {
-    // Ignore storage read error
-  }
-  return DEFAULT_SETTINGS;
-}
-
 export default function App() {
-  const [activeTab, setActiveTab] = useState<NavTab>('video');
-  const [comics, setComics] = useState<ComicItem[]>(loadInitialComics);
-  const [activeComicId, setActiveComicId] = useState<string>(
-    () => loadInitialComics()[0]?.id || STARTER_COMICS[0].id
-  );
-  const [videos, setVideos] = useState<VideoItem[]>(loadInitialVideos);
-  const [activeVideoId, setActiveVideoId] = useState<string>(
-    () => loadInitialVideos()[0]?.id || STARTER_VIDEOS[0].id
-  );
-  const [settings, setSettings] = useState<AutomationSettings>(loadInitialSettings);
+  const [activeTab, setActiveTab] = useState<AppTab>('video');
+
+  const [settings, setSettings] = useState<AutomationSettings>(() => {
+    try {
+      const saved = localStorage.getItem(SETTINGS_KEY);
+      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+    } catch {
+      return DEFAULT_SETTINGS;
+    }
+  });
+
+  const [comics, setComics] = useState<ComicItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(COMICS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return STARTER_COMICS;
+  });
+
+  const [videos, setVideos] = useState<VideoItem[]>(STARTER_VIDEOS);
+  const [activeVideoId, setActiveVideoId] = useState<string>(STARTER_VIDEOS[0].id);
+  const [activeComicId, setActiveComicId] = useState<string>(comics[0]?.id || STARTER_COMICS[0].id);
+  const [savedRenderedVideos, setSavedRenderedVideos] = useState<SavedRenderedVideo[]>([]);
+  const [vaultReady, setVaultReady] = useState(false);
+
+  const [logs, setLogs] = useState<PublishLogEntry[]>(() => {
+    try {
+      const saved = localStorage.getItem(LOGS_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [isGenerating, setIsGenerating] = useState(false);
   const [publishingId, setPublishingId] = useState<string | null>(null);
   const [statusBanner, setStatusBanner] = useState<{ type: 'ok' | 'err'; text: string } | null>(
     null
   );
-  const [nextAutoRunAt, setNextAutoRunAt] = useState<string | null>(null);
   const [batchProgress, setBatchProgress] = useState<{
     current: number;
     total: number;
@@ -131,509 +119,406 @@ export default function App() {
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const activeComic = useMemo(
-    () => comics.find((c) => c.id === activeComicId) || comics[0],
-    [comics, activeComicId]
-  );
+  // Hydrate persistent Video Projects & Saved MP4 Videos from IndexedDB + Server Disk
+  useEffect(() => {
+    let cancelled = false;
+    async function hydratePersistence() {
+      const [vaultProjects, serverProjectsRes, vaultRendered, serverRenderedRes] =
+        await Promise.all([
+          loadVideoProjectsFromVault(),
+          fetch('/api/video-projects')
+            .then((r) => r.json())
+            .catch(() => ({ projects: [] })),
+          listRenderedVideosFromVault(),
+          fetch('/api/saved-videos')
+            .then((r) => r.json())
+            .catch(() => ({ videos: [] })),
+        ]);
 
-  const activeVideo = useMemo(
-    () => videos.find((v) => v.id === activeVideoId) || videos[0],
-    [videos, activeVideoId]
-  );
+      if (cancelled) return;
+
+      const serverProjects = Array.isArray(serverProjectsRes?.projects)
+        ? (serverProjectsRes.projects as VideoItem[])
+        : [];
+      const mergedMap = new Map<string, VideoItem>();
+      [...vaultProjects, ...serverProjects, ...STARTER_VIDEOS].forEach((v) => {
+        if (v && v.id && !mergedMap.has(v.id)) {
+          mergedMap.set(v.id, v);
+        }
+      });
+      const mergedProjects = Array.from(mergedMap.values());
+      if (mergedProjects.length > 0) {
+        setVideos(mergedProjects);
+        setActiveVideoId(mergedProjects[0].id);
+      }
+
+      const serverRendered = Array.isArray(serverRenderedRes?.videos)
+        ? (serverRenderedRes.videos as SavedRenderedVideo[])
+        : [];
+      const renderedMap = new Map<string, SavedRenderedVideo>();
+      [...vaultRendered, ...serverRendered].forEach((rv) => {
+        if (rv && rv.id && !renderedMap.has(rv.id)) {
+          renderedMap.set(rv.id, rv);
+        }
+      });
+      setSavedRenderedVideos(
+        Array.from(renderedMap.values()).sort((a, b) =>
+          (b.createdAt || '').localeCompare(a.createdAt || '')
+        )
+      );
+      setVaultReady(true);
+    }
+    hydratePersistence();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Persist settings, comics, and logs to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch {
+      // ignore
+    }
+  }, [settings]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_COMICS_KEY, JSON.stringify(comics.slice(0, 40)));
+      localStorage.setItem(COMICS_KEY, JSON.stringify(comics.slice(0, 40)));
     } catch {
-      // Ignore quota exceeded
+      // ignore
     }
   }, [comics]);
 
   useEffect(() => {
     try {
-      // Omit large base64 voiceClips when persisting metadata to localStorage
-      const lightweight = videos.slice(0, 12).map((v) => ({
-        ...v,
-        voiceClips: undefined,
-      }));
-      localStorage.setItem(STORAGE_VIDEOS_KEY, JSON.stringify(lightweight));
+      localStorage.setItem(LOGS_KEY, JSON.stringify(logs.slice(0, 50)));
     } catch {
-      // Ignore quota exceeded
+      // ignore
     }
-  }, [videos]);
+  }, [logs]);
 
+  // Persist video projects to IndexedDB + Server JSON whenever updated (after hydration)
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify(settings));
-    } catch {
-      // Ignore quota exceeded
-    }
-  }, [settings]);
+    if (!vaultReady) return;
+    saveVideoProjectsToVault(videos).catch(() => {});
+    // Save lightweight project metadata (without huge voiceClips if >15MB, keep all scenes)
+    fetch('/api/video-projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projects: videos.slice(0, 25).map((v) => ({ ...v, voiceClips: undefined })),
+      }),
+    }).catch(() => {});
+  }, [videos, vaultReady]);
+
+  const activeVideo = videos.find((v) => v.id === activeVideoId) || videos[0] || STARTER_VIDEOS[0];
+  const activeComic = comics.find((c) => c.id === activeComicId) || comics[0] || STARTER_COMICS[0];
 
   const updateSettings = useCallback((patch: Partial<AutomationSettings>) => {
     setSettings((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  const updateVideo = useCallback((updated: VideoItem) => {
+    setVideos((prev) => {
+      const exists = prev.some((v) => v.id === updated.id);
+      if (!exists) return [updated, ...prev];
+      return prev.map((v) => (v.id === updated.id ? updated : v));
+    });
   }, []);
 
   const updateComic = useCallback((updated: ComicItem) => {
     setComics((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
   }, []);
 
-  const updateVideo = useCallback((updated: VideoItem) => {
-    setVideos((prev) => prev.map((v) => (v.id === updated.id ? updated : v)));
+  const handleSaveRenderedVideo = useCallback(
+    async (vid: VideoItem, rendered: RenderedVideoResult): Promise<SavedRenderedVideo> => {
+      const id = `saved_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      let meta: SavedRenderedVideo = {
+        id,
+        videoId: vid.id,
+        title: vid.title,
+        category: vid.category,
+        renderStyle: vid.renderStyle || 'stick_meme',
+        aspectRatio: vid.aspectRatio,
+        durationSec: rendered.durationSec,
+        sizeBytes: rendered.blob.size,
+        mimeType: rendered.mimeType,
+        createdAt: new Date().toISOString(),
+        fbCaption: vid.fbCaption,
+      };
+
+      // Upload & permanently save to Server Disk
+      try {
+        const form = new FormData();
+        form.append('video', rendered.blob, `${id}.${rendered.extension}`);
+        form.append('id', id);
+        form.append('videoId', vid.id);
+        form.append('title', vid.title);
+        form.append('category', vid.category);
+        form.append('renderStyle', vid.renderStyle || 'stick_meme');
+        form.append('aspectRatio', vid.aspectRatio);
+        form.append('durationSec', String(rendered.durationSec));
+        form.append('fbCaption', vid.fbCaption || '');
+
+        const res = await fetch('/api/saved-videos', {
+          method: 'POST',
+          body: form,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.saved) {
+            meta = { ...meta, ...data.saved };
+          }
+        }
+      } catch (err) {
+        console.warn('Server video save fallback to IndexedDB:', err);
+      }
+
+      // Always mirror in browser IndexedDB for instant offline playback
+      await saveRenderedVideoToVault(meta, rendered.blob);
+      setSavedRenderedVideos((prev) => [meta, ...prev.filter((x) => x.id !== meta.id)]);
+      return meta;
+    },
+    []
+  );
+
+  const handleDeleteSavedRenderedVideo = useCallback(async (id: string) => {
+    await deleteRenderedVideoFromVault(id);
+    await fetch(`/api/saved-videos/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(
+      () => {}
+    );
+    setSavedRenderedVideos((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
-  const todayAutoCount = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    return comics.filter(
-      (c) =>
-        (c.status === 'published' || c.status === 'scheduled') &&
-        (c.publishedAt || c.scheduledFor || '').startsWith(today)
-    ).length;
-  }, [comics]);
-
-  const queuedUnsentComics = useMemo(
-    () => comics.filter((c) => c.status === 'draft' || (c.status === 'scheduled' && !c.fbPostId)),
-    [comics]
-  );
-
-  const generateComicRequest = useCallback(
-    async (
-      opts: {
-        category: string;
-        languageMode: AutomationSettings['languageMode'];
-        layout: 'auto' | LayoutMode;
-        customHint: string;
-      },
-      extraRecentTitles: string[] = []
-    ): Promise<ComicItem> => {
-      setIsGenerating(true);
-      setStatusBanner(null);
-      try {
-        const recentTitles = [
-          ...extraRecentTitles,
-          ...comics.slice(0, 12).map((c) => c.title),
-        ];
-        const res = await fetch('/api/generate-comic', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...opts,
-            recentTitles,
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || 'কার্টুন জেনারেট করা যায়নি।');
-        }
-        const newItem: ComicItem = {
-          ...data,
-          status: 'draft',
-        };
-        setComics((prev) => [newItem, ...prev]);
-        setActiveComicId(newItem.id);
-        setStatusBanner({
-          type: 'ok',
-          text: `নতুন কার্টুন তৈরি হয়েছে: "${newItem.title}"`,
-        });
-        return newItem;
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'কার্টুন তৈরিতে সমস্যা হয়েছে।';
-        setStatusBanner({ type: 'err', text: message });
-        throw err;
-      } finally {
-        setIsGenerating(false);
-      }
-    },
-    [comics]
-  );
-
-  const publishComicItem = useCallback(
-    async (comic: ComicItem, scheduledDate?: Date) => {
-      setPublishingId(comic.id);
-      setStatusBanner(null);
-      try {
-        const imageDataUrl =
-          comic.id === activeComic.id && canvasRef.current
-            ? canvasRef.current.toDataURL('image/png')
-            : await renderOffscreenPng(comic, settings);
-
-        if (settings.pageId && settings.pageAccessToken) {
-          const scheduledPublishTime = scheduledDate
-            ? Math.floor(scheduledDate.getTime() / 1000)
-            : undefined;
-          const res = await fetch('/api/facebook/publish', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              pageId: settings.pageId,
-              pageAccessToken: settings.pageAccessToken,
-              caption: comic.fbCaption,
-              imageDataUrl,
-              scheduledPublishTime,
-            }),
-          });
-          const data = await res.json();
-          if (!res.ok) {
-            throw new Error(data.error || 'Facebook Page-এ পোস্ট করা যায়নি।');
-          }
-
-          if (scheduledDate) {
-            const updated: ComicItem = {
-              ...comic,
-              status: 'scheduled',
-              scheduledFor: scheduledDate.toISOString(),
-              fbPostId: data.postId || data.id,
-              publishTarget: 'facebook_page',
-              errorMessage: undefined,
-            };
-            updateComic(updated);
-            setStatusBanner({
-              type: 'ok',
-              text: `Facebook সার্ভারে শিডিউল হয়েছে (${formatBdTimeLabel(scheduledDate)})`,
-            });
-          } else {
-            const updated: ComicItem = {
-              ...comic,
-              status: 'published',
-              publishedAt: new Date().toISOString(),
-              fbPostId: data.postId || data.id,
-              publishTarget: 'facebook_page',
-              errorMessage: undefined,
-            };
-            updateComic(updated);
-            setStatusBanner({
-              type: 'ok',
-              text: `Facebook Page-এ সফলভাবে পোস্ট হয়েছে (Post ID: ${data.postId || data.id})`,
-            });
-          }
-          return;
-        }
-
-        if (settings.webhookUrl && !scheduledDate) {
-          const res = await fetch('/api/webhook/publish', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              webhookUrl: settings.webhookUrl,
-              payload: {
-                id: comic.id,
-                title: comic.title,
-                category: comic.category,
-                caption: comic.fbCaption,
-                brand: settings.logoText,
-                imageDataUrl,
-                createdAt: comic.createdAt,
-              },
-            }),
-          });
-          const data = await res.json();
-          if (!res.ok) {
-            throw new Error(data.error || 'Webhook-এ পাঠানো যায়নি।');
-          }
-          const updated: ComicItem = {
-            ...comic,
-            status: 'published',
-            publishedAt: new Date().toISOString(),
-            publishTarget: 'webhook',
-            errorMessage: undefined,
-          };
-          updateComic(updated);
-          setStatusBanner({
-            type: 'ok',
-            text: 'Webhook অটোমেশনে সফলভাবে পাঠানো হয়েছে।',
-          });
-          return;
-        }
-
-        throw new Error(
-          'পোস্ট/শিডিউল করার আগে "Facebook অটো-পোস্ট" ট্যাবে Page ID ও Access Token দিন।'
-        );
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'পোস্ট করা যায়নি।';
-        updateComic({
-          ...comic,
-          status: 'failed',
-          errorMessage: message,
-        });
-        setStatusBanner({ type: 'err', text: message });
-        throw err;
-      } finally {
-        setPublishingId(null);
-      }
-    },
-    [activeComic.id, settings, updateComic]
-  );
-
-  const publishVideoItem = useCallback(
-    async (
-      video: VideoItem,
-      rendered: RenderedVideoResult,
-      scheduledDate?: Date
-    ) => {
-      if (!settings.pageId || !settings.pageAccessToken) {
-        throw new Error(
-          'ভিডিও পোস্ট/শিডিউল করার আগে "Facebook অটো-পোস্ট" ট্যাবে Page ID ও Access Token দিন।'
-        );
-      }
-
-      const form = new FormData();
-      form.append('video', rendered.blob, `rafu-folk-${video.id}.${rendered.extension}`);
-      form.append('pageId', settings.pageId);
-      form.append('pageAccessToken', settings.pageAccessToken);
-      form.append('title', video.title);
-      form.append('description', video.fbCaption);
-      if (scheduledDate) {
-        form.append(
-          'scheduledPublishTime',
-          String(Math.floor(scheduledDate.getTime() / 1000))
-        );
-      }
-
-      const res = await fetch('/api/facebook/publish-video', {
+  const generateComicRequest = async (opts: {
+    category: string;
+    languageMode: 'bangla' | 'banglish' | 'mixed';
+    layout: LayoutMode | 'auto';
+    customHint: string;
+  }) => {
+    setIsGenerating(true);
+    setStatusBanner(null);
+    try {
+      const res = await fetch('/api/generate-comic', {
         method: 'POST',
-        body: form,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(opts),
       });
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Facebook Page-এ ভিডিও পোস্ট করা যায়নি।');
-      }
-
-      updateVideo({
-        ...video,
-        status: scheduledDate ? 'scheduled' : 'published',
-        scheduledFor: scheduledDate ? scheduledDate.toISOString() : undefined,
-        publishedAt: scheduledDate ? undefined : new Date().toISOString(),
-        fbPostId: data.postId || data.id,
-        errorMessage: undefined,
-      });
-    },
-    [settings.pageId, settings.pageAccessToken, updateVideo]
-  );
-
-  const handleGenerateAndPublish = useCallback(
-    async (opts: {
-      category: string;
-      languageMode: AutomationSettings['languageMode'];
-      layout: 'auto' | LayoutMode;
-      customHint: string;
-    }) => {
-      try {
-        const created = await generateComicRequest(opts);
-        await publishComicItem(created);
-      } catch {
-        // Error banner already handled
-      }
-    },
-    [generateComicRequest, publishComicItem]
-  );
-
-  const handleBatchSchedule = useCallback(
-    async (daysCount: number, publishToFacebook: boolean) => {
-      const slots = settings.dailySlots?.length ? settings.dailySlots : DEFAULT_BD_SLOTS;
-      const total = daysCount * slots.length;
-      const jitter = settings.useExactSlots ? 0 : settings.randomJitterMinutes;
-      const targetDates = computeUpcomingBdSlots(slots, total, jitter);
-
-      setBatchBanner(null);
-      setBatchProgress({
-        current: 0,
-        total,
-        label: publishToFacebook
-          ? 'AI কার্টুন তৈরি করে Facebook-এ শিডিউল হচ্ছে...'
-          : 'AI বিনা স্ক্রিপ্টে কার্টুন তৈরি করছে...',
-      });
-
-      const batchTitles: string[] = [];
-      let successCount = 0;
-
-      try {
-        for (let i = 0; i < total; i++) {
-          const slotDate = targetDates[i];
-          setBatchProgress({
-            current: i,
-            total,
-            label: `কার্টুন ${i + 1}/${total} তৈরি হচ্ছে (${formatBdTimeLabel(slotDate)})...`,
-          });
-
-          const created = await generateComicRequest(
-            {
-              category: settings.preferredCategory || 'auto',
-              languageMode: settings.languageMode || 'bangla',
-              layout: 'auto',
-              customHint: '',
-            },
-            batchTitles
-          );
-          batchTitles.push(created.title);
-
-          if (publishToFacebook) {
-            await publishComicItem(created, slotDate);
-          } else {
-            updateComic({
-              ...created,
-              status: 'scheduled',
-              scheduledFor: slotDate.toISOString(),
-            });
-          }
-          successCount += 1;
-        }
-
-        setBatchProgress({ current: total, total, label: 'সম্পন্ন হয়েছে!' });
-        setBatchBanner({
-          type: 'ok',
-          text: publishToFacebook
-            ? `${successCount}টি নতুন কার্টুন তৈরি করে বাংলাদেশ সময় অনুযায়ী Facebook সার্ভারে শিডিউল করা হয়েছে।`
-            : `${successCount}টি নতুন কার্টুন তৈরি করে হিস্ট্রি ও কিউতে সংরক্ষণ করা হয়েছে।`,
-        });
-      } catch (err) {
-        const msg =
-          err instanceof Error ? err.message : 'ব্যাচ প্রক্রিয়া সম্পন্ন হয়নি।';
-        setBatchBanner({
-          type: 'err',
-          text: `${successCount}/${total} সম্পন্ন হয়েছে। ত্রুটি: ${msg}`,
-        });
-      } finally {
-        setTimeout(() => setBatchProgress(null), 1500);
-      }
-    },
-    [settings, generateComicRequest, publishComicItem, updateComic]
-  );
-
-  const handleScheduleDraftsToFacebook = useCallback(async () => {
-    const slots = settings.dailySlots?.length ? settings.dailySlots : DEFAULT_BD_SLOTS;
-    const jitter = settings.useExactSlots ? 0 : settings.randomJitterMinutes;
-    const targets = queuedUnsentComics;
-    if (targets.length === 0) return;
-
-    const freshSlots = computeUpcomingBdSlots(slots, targets.length, jitter);
-    setBatchBanner(null);
-    setBatchProgress({
-      current: 0,
-      total: targets.length,
-      label: 'কিউয়ের কার্টুনগুলো Facebook-এ শিডিউল হচ্ছে...',
-    });
-
-    let done = 0;
-    try {
-      for (let i = 0; i < targets.length; i++) {
-        const item = targets[i];
-        const existingMs = item.scheduledFor ? new Date(item.scheduledFor).getTime() : 0;
-        const slotDate =
-          existingMs >= Date.now() + 12 * 60 * 1000
-            ? new Date(existingMs)
-            : freshSlots[i];
-
-        setBatchProgress({
-          current: i,
-          total: targets.length,
-          label: `শিডিউল হচ্ছে: ${item.title} (${formatBdTimeLabel(slotDate)})`,
-        });
-
-        await publishComicItem(item, slotDate);
-        done += 1;
-      }
-
-      setBatchProgress({ current: targets.length, total: targets.length, label: 'সম্পন্ন!' });
-      setBatchBanner({
-        type: 'ok',
-        text: `কিউতে থাকা ${done}টি কার্টুন সফলভাবে Facebook সার্ভারে শিডিউল হয়েছে।`,
-      });
+      if (!res.ok) throw new Error(data.error || 'কার্টুন তৈরি ব্যর্থ হয়েছে।');
+      const newComic: ComicItem = { ...data, status: 'draft' };
+      setComics((prev) => [newComic, ...prev]);
+      setActiveComicId(newComic.id);
+      setStatusBanner({ type: 'ok', text: 'নতুন অটো কার্টুন তৈরি হয়েছে!' });
+      return newComic;
     } catch (err) {
-      setBatchBanner({
+      setStatusBanner({
         type: 'err',
-        text: `${done}/${targets.length} শিডিউল হয়েছে। ${
-          err instanceof Error ? err.message : ''
-        }`,
+        text: err instanceof Error ? err.message : 'কার্টুন তৈরি করা যায়নি।',
       });
+      return null;
     } finally {
-      setTimeout(() => setBatchProgress(null), 1500);
+      setIsGenerating(false);
     }
-  }, [queuedUnsentComics, settings, publishComicItem]);
+  };
 
-  const handleDownloadComic = useCallback(
-    async (comic: ComicItem) => {
-      const dataUrl =
+  const publishComicItem = async (comic: ComicItem, scheduledDate?: Date) => {
+    setPublishingId(comic.id);
+    setStatusBanner(null);
+    try {
+      const imageDataUrl =
         comic.id === activeComic.id && canvasRef.current
           ? canvasRef.current.toDataURL('image/png')
           : await renderOffscreenPng(comic, settings);
-      const a = document.createElement('a');
-      a.href = dataUrl;
-      a.download = `rafu-folk-${comic.id}.png`;
-      a.click();
-    },
-    [activeComic.id, settings]
-  );
 
-  // Compute next Bangladesh Time daily slot when live browser Auto-Pilot is active
-  useEffect(() => {
-    if (!settings.autoPilotEnabled) {
-      setNextAutoRunAt(null);
-      return;
+      if (settings.pageId && settings.pageAccessToken) {
+        const scheduledPublishTime = scheduledDate
+          ? Math.floor(scheduledDate.getTime() / 1000)
+          : undefined;
+        const res = await fetch('/api/facebook/publish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pageId: settings.pageId,
+            pageAccessToken: settings.pageAccessToken,
+            caption: comic.fbCaption,
+            imageDataUrl,
+            scheduledPublishTime,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Facebook পোস্ট ব্যর্থ হয়েছে।');
+
+        const updated: ComicItem = {
+          ...comic,
+          status: scheduledDate ? 'scheduled' : 'published',
+          scheduledFor: scheduledDate?.toISOString(),
+          publishedAt: scheduledDate ? undefined : new Date().toISOString(),
+          fbPostId: data.postId,
+          publishTarget: 'facebook_page',
+        };
+        updateComic(updated);
+        setLogs((prev) => [
+          {
+            id: `log_${Date.now()}`,
+            comicId: comic.id,
+            title: comic.title,
+            target: 'facebook_page',
+            status: 'published',
+            fbPostId: data.postId,
+            timestamp: new Date().toISOString(),
+          },
+          ...prev,
+        ]);
+        setStatusBanner({ type: 'ok', text: 'Facebook Page-এ সফলভাবে পোস্ট হয়েছে!' });
+      } else if (settings.webhookUrl) {
+        const res = await fetch('/api/webhook/publish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            webhookUrl: settings.webhookUrl,
+            payload: { comic, imageDataUrl },
+          }),
+        });
+        if (!res.ok) throw new Error('Webhook পোস্ট ব্যর্থ হয়েছে।');
+        updateComic({ ...comic, status: 'published', publishedAt: new Date().toISOString() });
+        setStatusBanner({ type: 'ok', text: 'Webhook-এ পাঠানো হয়েছে!' });
+      } else {
+        throw new Error('আগে Facebook অটো ট্যাব থেকে Page ID ও Token দিন।');
+      }
+    } catch (err) {
+      setStatusBanner({
+        type: 'err',
+        text: err instanceof Error ? err.message : 'পোস্ট ব্যর্থ হয়েছে।',
+      });
+    } finally {
+      setPublishingId(null);
     }
-    const slots = settings.dailySlots?.length ? settings.dailySlots : DEFAULT_BD_SLOTS;
-    const jitter = settings.useExactSlots ? 0 : settings.randomJitterMinutes;
-    const [nextSlot] = computeUpcomingBdSlots(slots, 1, jitter, new Date(), 0);
-    setNextAutoRunAt(nextSlot ? nextSlot.toISOString() : null);
-  }, [
-    settings.autoPilotEnabled,
-    settings.dailySlots,
-    settings.useExactSlots,
-    settings.randomJitterMinutes,
-  ]);
+  };
 
-  // Background browser Auto-Pilot timer loop
-  useEffect(() => {
-    if (!settings.autoPilotEnabled || !nextAutoRunAt) return;
-    const timer = setInterval(async () => {
-      if (Date.now() < new Date(nextAutoRunAt).getTime()) return;
-      const maxDaily = settings.dailySlots?.length || settings.dailyCap;
-      if (todayAutoCount >= maxDaily) return;
-      if (!settings.pageAccessToken && !settings.webhookUrl) return;
-      if (isGenerating || publishingId) return;
+  const publishVideoItem = async (
+    vid: VideoItem,
+    rendered: RenderedVideoResult,
+    scheduledDate?: Date
+  ) => {
+    if (!settings.pageId || !settings.pageAccessToken) {
+      throw new Error('Facebook-এ পোস্ট করতে Page ID ও Access Token সেট করুন।');
+    }
+    const form = new FormData();
+    form.append('video', rendered.blob, `rafu-folk-${Date.now()}.${rendered.extension}`);
+    form.append('pageId', settings.pageId);
+    form.append('pageAccessToken', settings.pageAccessToken);
+    form.append('title', vid.title);
+    form.append('description', vid.fbCaption);
+    if (scheduledDate) {
+      form.append('scheduledPublishTime', String(Math.floor(scheduledDate.getTime() / 1000)));
+    }
+    const res = await fetch('/api/facebook/publish-video', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'ভিডিও পোস্ট ব্যর্থ হয়েছে।');
 
-      await handleGenerateAndPublish({
+    updateVideo({
+      ...vid,
+      status: scheduledDate ? 'scheduled' : 'published',
+      fbPostId: data.postId,
+      publishedAt: scheduledDate ? undefined : new Date().toISOString(),
+    });
+  };
+
+  const handleDownloadComic = async (comic: ComicItem) => {
+    const dataUrl =
+      comic.id === activeComic.id && canvasRef.current
+        ? canvasRef.current.toDataURL('image/png')
+        : await renderOffscreenPng(comic, settings);
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `${comic.id}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  const handleGenerateAndPublish = async (opts: {
+    category: string;
+    languageMode: 'bangla' | 'banglish' | 'mixed';
+    layout: LayoutMode | 'auto';
+    customHint: string;
+  }) => {
+    const created = await generateComicRequest(opts);
+    if (created) {
+      await publishComicItem(created);
+    }
+  };
+
+  const handleBatchSchedule = async (daysCount: number, publishToFacebook = true) => {
+    setBatchBanner(null);
+    const totalCount = Math.max(1, daysCount * Math.max(1, settings.dailySlots.length));
+    const slots = computeUpcomingBdSlots(
+      settings.dailySlots,
+      totalCount,
+      settings.randomJitterMinutes
+    );
+    for (let i = 0; i < totalCount; i++) {
+      setBatchProgress({
+        current: i + 1,
+        total: totalCount,
+        label: `কার্টুন তৈরি ও শিডিউল হচ্ছে (${i + 1}/${totalCount})`,
+      });
+      const created = await generateComicRequest({
         category: settings.preferredCategory || 'auto',
         languageMode: settings.languageMode || 'bangla',
         layout: 'auto',
         customHint: '',
       });
-
-      const slots = settings.dailySlots?.length ? settings.dailySlots : DEFAULT_BD_SLOTS;
-      const jitter = settings.useExactSlots ? 0 : settings.randomJitterMinutes;
-      const [nextSlot] = computeUpcomingBdSlots(slots, 1, jitter, new Date(), 0);
-      setNextAutoRunAt(nextSlot ? nextSlot.toISOString() : null);
-    }, 15_000);
-    return () => clearInterval(timer);
-  }, [
-    settings,
-    nextAutoRunAt,
-    todayAutoCount,
-    isGenerating,
-    publishingId,
-    handleGenerateAndPublish,
-  ]);
-
-  const navItems: Array<{ id: NavTab; label: string; icon: typeof LayoutGrid }> = [
-    { id: 'video', label: 'AI ভিডিও স্টুডিও', icon: Film },
-    { id: 'studio', label: 'কার্টুন স্টুডিও', icon: LayoutGrid },
-    { id: 'branding', label: 'লোগো ব্র্যান্ডিং', icon: Stamp },
-    { id: 'automation', label: 'Facebook অটো-পোস্ট', icon: Share2 },
-    { id: 'history', label: 'হিস্ট্রি ও কিউ', icon: History },
-  ];
-
-  const pageTitleMap: Record<NavTab, string> = {
-    video: 'AI ভয়েস কার্টুন ও Reels স্টুডিও',
-    studio: 'কার্টুন স্টুডিও',
-    branding: 'লোগো ব্র্যান্ডিং',
-    automation: 'Facebook অটো-পোস্ট',
-    history: 'হিস্ট্রি ও কিউ',
+      if (created && slots[i] && publishToFacebook) {
+        await publishComicItem(created, slots[i]);
+      }
+    }
+    setBatchProgress(null);
+    setBatchBanner({ type: 'ok', text: `${totalCount}টি কার্টুন শিডিউল সম্পন্ন হয়েছে!` });
   };
+
+  const handleScheduleDraftsToFacebook = async () => {
+    const drafts = comics.filter((c) => c.status === 'draft').slice(0, 6);
+    if (drafts.length === 0) return;
+    const slots = computeUpcomingBdSlots(
+      settings.dailySlots,
+      drafts.length,
+      settings.randomJitterMinutes
+    );
+    for (let i = 0; i < drafts.length; i++) {
+      setBatchProgress({
+        current: i + 1,
+        total: drafts.length,
+        label: `ড্রাফট শিডিউল হচ্ছে (${i + 1}/${drafts.length})`,
+      });
+      if (slots[i]) await publishComicItem(drafts[i], slots[i]);
+    }
+    setBatchProgress(null);
+  };
+
+  const todayKey = getBdDateKey();
+  const todayAutoCount = logs.filter(
+    (l) => l.status === 'published' && getBdDateKey(l.timestamp) === todayKey
+  ).length;
+  const nextSlotDate = computeUpcomingBdSlots(settings.dailySlots, 1, 0)[0] || null;
+  const nextAutoRunAt = nextSlotDate ? nextSlotDate.toISOString() : null;
+  const queuedUnsentComics = comics.filter((c) => c.status === 'draft');
+
+  const navItems: Array<{ id: AppTab; label: string; icon: typeof Film }> = [
+    { id: 'video', label: 'ভিডিও স্টুডিও', icon: Film },
+    { id: 'history', label: 'সেইভ করা ভিডিও', icon: Archive },
+    { id: 'studio', label: 'কমিক ছবি', icon: LayoutGrid },
+    { id: 'branding', label: 'লোগো ও ব্র্যান্ডিং', icon: Palette },
+    { id: 'automation', label: 'Facebook অটো', icon: Share2 },
+  ];
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900">
-      {/* Left Sidebar Navigation */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-200 bg-white px-4 py-6 lg:flex">
+      {/* Desktop Sidebar */}
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-200 bg-white px-4 py-5 lg:flex">
         <div className="px-2">
           <RafuFolkLogo
             text={settings.logoText || '@@RAFU FOLK@@'}
@@ -664,17 +549,23 @@ export default function App() {
           })}
         </nav>
 
-        <div className="mt-6 border-t border-slate-100 pt-4 text-xs text-slate-500 space-y-1.5 px-2">
+        <div className="mt-6 space-y-1.5 border-t border-slate-100 px-2 pt-4 text-xs text-slate-500">
           <div className="flex items-center justify-between">
-            <span>কার্টুন</span>
+            <span>সেইভ করা MP4</span>
             <span className="font-mono-tabular font-semibold text-slate-900">
-              {comics.length}
+              {savedRenderedVideos.length}
             </span>
           </div>
           <div className="flex items-center justify-between">
-            <span>ভিডিও</span>
+            <span>ভিডিও প্রজেক্ট</span>
             <span className="font-mono-tabular font-semibold text-slate-900">
               {videos.length}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span>কমিক স্ট্রিপ</span>
+            <span className="font-mono-tabular font-semibold text-slate-900">
+              {comics.length}
             </span>
           </div>
         </div>
@@ -682,59 +573,37 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Top Bar Contract: Breadcrumb Left — Primary Actions Right */}
-        <header className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3.5 sm:px-8">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="lg:hidden">
-              <RafuFolkLogo
-                text={settings.logoText || '@@RAFU FOLK@@'}
-                styleVariant={settings.logoStyle}
-                size="sm"
-              />
-            </div>
-            <div className="hidden items-center gap-2 text-sm sm:flex whitespace-nowrap">
-              <span className="font-semibold text-slate-500">
-                {settings.logoText || '@@RAFU FOLK@@'}
-              </span>
-              <span className="text-slate-300" aria-hidden="true">
-                /
-              </span>
-              <span className="font-bold text-slate-900">{pageTitleMap[activeTab]}</span>
-            </div>
-          </div>
+        {/* Strict 3-Zone Top Bar Contract */}
+        <header className="sticky top-0 z-20 flex items-center justify-between gap-8 border-b border-slate-200 bg-white px-4 py-3.5 sm:px-8">
+          <span className="font-display text-base font-extrabold tracking-tight text-slate-900 whitespace-nowrap shrink-0">
+            {settings.logoText || '@@RAFU FOLK@@'}
+          </span>
 
-          <div className="flex items-center gap-2.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('studio');
-                generateComicRequest({
-                  category: settings.preferredCategory || 'auto',
-                  languageMode: settings.languageMode || 'bangla',
-                  layout: 'auto',
-                  customHint: '',
-                });
-              }}
-              disabled={isGenerating}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-60 whitespace-nowrap shrink-0"
-            >
-              <Wand2 className="h-3.5 w-3.5" />
-              <span>{isGenerating ? 'তৈরি হচ্ছে...' : 'নতুন অটো কার্টুন'}</span>
-            </button>
+          <nav className="hidden items-center gap-6 text-sm font-medium text-slate-600 md:flex">
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setActiveTab(item.id)}
+                className={`transition-colors whitespace-nowrap shrink-0 ${
+                  activeTab === item.id
+                    ? 'font-semibold text-slate-900 underline underline-offset-4'
+                    : 'hover:text-slate-900'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
 
-            <button
-              type="button"
-              onClick={() => publishComicItem(activeComic)}
-              disabled={
-                publishingId !== null ||
-                (!settings.pageAccessToken && !settings.webhookUrl)
-              }
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap shrink-0"
-            >
-              <Send className="h-3.5 w-3.5" />
-              <span>{publishingId ? 'পোস্ট হচ্ছে...' : 'Page-এ পোস্ট'}</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('video')}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap shrink-0"
+          >
+            <Wand2 className="h-3.5 w-3.5" />
+            <span>ভিডিও স্টুডিও</span>
+          </button>
         </header>
 
         {/* Mobile Tab Strip */}
@@ -758,12 +627,12 @@ export default function App() {
           })}
         </div>
 
-        {/* Viewport Content */}
         <main className="mx-auto w-full max-w-6xl flex-1 p-4 sm:p-8">
           {activeTab === 'video' && (
             <VideoStudioView
               video={activeVideo}
               videos={videos}
+              savedRenderedVideos={savedRenderedVideos}
               settings={settings}
               onSelectVideo={(vid) => {
                 setVideos((prev) =>
@@ -776,7 +645,41 @@ export default function App() {
                 setVideos((prev) => [newVid, ...prev]);
                 setActiveVideoId(newVid.id);
               }}
+              onSaveRenderedVideo={handleSaveRenderedVideo}
+              onDeleteSavedRenderedVideo={handleDeleteSavedRenderedVideo}
               onPublishVideo={publishVideoItem}
+            />
+          )}
+
+          {activeTab === 'history' && (
+            <HistoryQueueView
+              comics={comics}
+              videos={videos}
+              savedRenderedVideos={savedRenderedVideos}
+              publishingId={publishingId}
+              onSelectComic={(item) => {
+                setActiveComicId(item.id);
+                setActiveTab('studio');
+              }}
+              onSelectVideo={(vid) => {
+                setActiveVideoId(vid.id);
+                setActiveTab('video');
+              }}
+              onPublishComic={(item) => publishComicItem(item)}
+              onDownloadComic={handleDownloadComic}
+              onDeleteComic={(id) => {
+                setComics((prev) => {
+                  const next = prev.filter((c) => c.id !== id);
+                  return next.length > 0 ? next : STARTER_COMICS;
+                });
+              }}
+              onDeleteVideoProject={(id) => {
+                setVideos((prev) => {
+                  const next = prev.filter((v) => v.id !== id);
+                  return next.length > 0 ? next : STARTER_VIDEOS;
+                });
+              }}
+              onDeleteSavedRenderedVideo={handleDeleteSavedRenderedVideo}
             />
           )}
 
@@ -828,25 +731,6 @@ export default function App() {
               onBatchSchedule={handleBatchSchedule}
               onScheduleDraftsToFacebook={handleScheduleDraftsToFacebook}
               scheduledQueueCount={queuedUnsentComics.length}
-            />
-          )}
-
-          {activeTab === 'history' && (
-            <HistoryQueueView
-              comics={comics}
-              publishingId={publishingId}
-              onSelectComic={(item) => {
-                setActiveComicId(item.id);
-                setActiveTab('studio');
-              }}
-              onPublishComic={(item) => publishComicItem(item)}
-              onDownloadComic={handleDownloadComic}
-              onDeleteComic={(id) => {
-                setComics((prev) => {
-                  const next = prev.filter((c) => c.id !== id);
-                  return next.length > 0 ? next : STARTER_COMICS;
-                });
-              }}
             />
           )}
         </main>

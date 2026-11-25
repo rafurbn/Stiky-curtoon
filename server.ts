@@ -12,17 +12,57 @@ import ffmpegStatic from 'ffmpeg-static';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
 const FFMPEG_PATH =
   typeof ffmpegStatic === 'string' && ffmpegStatic.length > 0 ? ffmpegStatic : 'ffmpeg';
 
+const DATA_DIR = path.resolve(__dirname, 'data');
+const SAVED_VIDEOS_DIR = path.join(DATA_DIR, 'saved-videos');
+const SAVED_VIDEOS_INDEX = path.join(SAVED_VIDEOS_DIR, 'index.json');
+const SAVED_PROJECTS_FILE = path.join(DATA_DIR, 'video-projects.json');
+
 const app = express();
-app.use(express.json({ limit: '25mb' }));
+app.use(express.json({ limit: '35mb' }));
 
 const uploadVideo = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 65 * 1024 * 1024 },
+  limits: { fileSize: 80 * 1024 * 1024 },
 });
+
+async function ensureDataDirs() {
+  await fs.mkdir(SAVED_VIDEOS_DIR, { recursive: true });
+}
+
+interface SavedVideoMeta {
+  id: string;
+  videoId: string;
+  title: string;
+  category: string;
+  renderStyle: 'stick_meme' | 'cartoon_2d';
+  aspectRatio: '9:16' | '1:1';
+  durationSec: number;
+  sizeBytes: number;
+  mimeType: string;
+  createdAt: string;
+  fbCaption?: string;
+  fileName: string;
+  serverUrl: string;
+}
+
+async function readSavedVideosIndex(): Promise<SavedVideoMeta[]> {
+  await ensureDataDirs();
+  try {
+    const raw = await fs.readFile(SAVED_VIDEOS_INDEX, 'utf8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeSavedVideosIndex(items: SavedVideoMeta[]): Promise<void> {
+  await ensureDataDirs();
+  await fs.writeFile(SAVED_VIDEOS_INDEX, JSON.stringify(items, null, 2), 'utf8');
+}
 
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -69,9 +109,8 @@ function extractGeminiErrorInfo(err: unknown): {
       if (typeof inner?.message === 'string') cleanMessage = inner.message;
     }
   } catch {
-    // Keep original message if not JSON
+    // Keep original message
   }
-
   return { code, status: statusText, message: cleanMessage };
 }
 
@@ -98,7 +137,6 @@ function shouldRetryOrFallback(err: unknown): boolean {
 function formatFriendlyGeminiError(err: unknown): { httpStatus: number; message: string } {
   const info = extractGeminiErrorInfo(err);
   const msg = info.message.toLowerCase();
-
   if (info.code === 503 || info.status === 'UNAVAILABLE' || msg.includes('high demand')) {
     return {
       httpStatus: 503,
@@ -113,29 +151,13 @@ function formatFriendlyGeminiError(err: unknown): { httpStatus: number; message:
         'Gemini API রেট লিমিট বা ফ্রি কোটা সাময়িকভাবে পূর্ণ হয়েছে (429)। কিছুক্ষণ পর আবার চেষ্টা করুন।',
     };
   }
-  if (
-    info.code === 401 ||
-    info.code === 403 ||
-    msg.includes('api_key') ||
-    msg.includes('permission_denied')
-  ) {
-    return {
-      httpStatus: 403,
-      message: 'GEMINI_API_KEY সঠিক নয় বা অনুমোদন পায়নি। সার্ভারের Environment Variable যাচাই করুন।',
-    };
-  }
-  if (info.code === 404 || info.status === 'NOT_FOUND') {
-    return {
-      httpStatus: 404,
-      message: 'নির্বাচিত AI মডেলটি পাওয়া যায়নি (404)। অনুগ্রহ করে পরে আবার চেষ্টা করুন।',
-    };
-  }
-
   return {
     httpStatus: 500,
-    message: info.message || 'AI জেনারেশনে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।',
+    message: info.message || 'AI স্ক্রিপ্ট তৈরি করা যায়নি।',
   };
 }
+
+const GEMINI_TEXT_MODEL_CHAIN = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'] as const;
 
 async function generateJsonWithRetryAndFallback(params: {
   ai: GoogleGenAI;
@@ -143,64 +165,46 @@ async function generateJsonWithRetryAndFallback(params: {
   systemInstruction: string;
   responseSchema: Record<string, unknown>;
 }) {
-  const attempts: Array<{ model: string; useThinkingLow: boolean; delayBeforeMs: number }> = [
-    { model: 'gemini-4-hydrogen', useThinkingLow: true, delayBeforeMs: 0 },
-    { model: 'gemini-4-hydrogen', useThinkingLow: true, delayBeforeMs: 900 },
-    { model: 'gemini-3.1-flash-lite', useThinkingLow: false, delayBeforeMs: 1200 },
-  ];
-
-  let lastErr: unknown;
-  for (let i = 0; i < attempts.length; i++) {
-    const attempt = attempts[i];
-    if (attempt.delayBeforeMs > 0) {
-      await sleep(attempt.delayBeforeMs);
-    }
-    try {
-      const response = await params.ai.models.generateContent({
-        model: attempt.model,
-        contents: params.contents,
-        config: {
-          ...(attempt.useThinkingLow
-            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
-            : {}),
-          systemInstruction: params.systemInstruction,
-          responseMimeType: 'application/json',
-          responseSchema: params.responseSchema,
-        },
-      });
-      return response;
-    } catch (err) {
-      lastErr = err;
-      console.warn(
-        `Gemini attempt ${i + 1} (${attempt.model}) failed:`,
-        extractGeminiErrorInfo(err).message
-      );
-      if (!shouldRetryOrFallback(err)) {
-        throw err;
+  let lastError: unknown;
+  for (const model of GEMINI_TEXT_MODEL_CHAIN) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const isGemini4 = model.startsWith('gemini-4');
+        const response = await params.ai.models.generateContent({
+          model,
+          contents: params.contents,
+          config: {
+            systemInstruction: params.systemInstruction,
+            responseMimeType: 'application/json',
+            responseSchema: params.responseSchema as never,
+            ...(isGemini4
+              ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+              : {}),
+          },
+        });
+        if (response.text?.trim()) {
+          return response;
+        }
+      } catch (err) {
+        lastError = err;
+        if (!shouldRetryOrFallback(err)) {
+          throw err;
+        }
+        await sleep(800 * (attempt + 1));
       }
     }
   }
-  throw lastErr;
+  throw lastError || new Error('All Gemini models failed.');
 }
 
 const CATEGORY_POOL = [
-  'বন্ধুদের আড্ডা ও টাকা ধার',
-  'অফিস, বস ও ছুটির বাহানা',
+  'বন্ধুদের আড্ডা ও মেস লাইফ',
+  'টাকা ধার ও কৃপণ বন্ধু',
+  'দৈনন্দিন মজার বিব্রতকর ঘটনা',
   'চা-দোকানের বুদ্ধিজীবী গপ্পো',
-  'ভালোবাসা ও সিঙ্গেল জীবনের কষ্ট',
-  'মায়ের ঝাড়ি ও ঘরোয়া কমেডি',
-  'পরীক্ষা, পড়াশোনা ও রাত জাগা',
-  'মোবাইল, নেট ও অনলাইন শপিং',
+  'অফিস, বস ও ছুটির বাহানা',
+  'মোবাইল, নেট ও পরীক্ষার হল',
 ];
-
-const VALID_LAYOUTS = ['1-panel', '2-panel', '3-panel', '4-panel'] as const;
-const VALID_THEMES = [
-  'cream_sketch',
-  'studio_white',
-  'notebook_grid',
-  'sunny_tint',
-  'chalk_mint',
-] as const;
 
 app.post('/api/generate-comic', async (req, res) => {
   try {
@@ -208,92 +212,57 @@ app.post('/api/generate-comic', async (req, res) => {
       category = 'auto',
       languageMode = 'bangla',
       layout = 'auto',
+      paperTheme = 'studio_white',
       customHint = '',
-      recentTitles = [],
     } = req.body ?? {};
 
     const chosenCategory =
       category === 'auto'
         ? CATEGORY_POOL[Math.floor(Math.random() * CATEGORY_POOL.length)]
         : String(category);
+    const chosenLayout = ['1-panel', '2-panel', '3-panel', '4-panel'].includes(String(layout))
+      ? String(layout)
+      : '2-panel';
+    const panelCount = parseInt(chosenLayout, 10) || 2;
+    const chosenTheme = [
+      'cream_sketch',
+      'studio_white',
+      'notebook_grid',
+      'sunny_tint',
+      'chalk_mint',
+    ].includes(String(paperTheme))
+      ? String(paperTheme)
+      : 'studio_white';
 
-    const chosenLayout =
-      layout === 'auto'
-        ? VALID_LAYOUTS[Math.floor(Math.random() * VALID_LAYOUTS.length)]
-        : VALID_LAYOUTS.includes(layout)
-          ? layout
-          : '3-panel';
-
-    const panelCount =
-      chosenLayout === '1-panel'
-        ? 1
-        : chosenLayout === '2-panel'
-          ? 2
-          : chosenLayout === '3-panel'
-            ? 3
-            : 4;
-
-    const chosenTheme = VALID_THEMES[Math.floor(Math.random() * VALID_THEMES.length)];
-
-    const languageInstruction =
+    const langRule =
       languageMode === 'banglish'
-        ? 'Write character dialogues and title in funny natural Banglish (Bengali written in English letters, e.g., "Mama, chai er bill ta de").'
-        : languageMode === 'mixed'
-          ? 'Write dialogues primarily in crisp natural Bengali with occasional humorous English words like Boss, Deadline, Recharge, WiFi.'
-          : 'Write dialogues, panel captions, title, and Facebook caption in crisp, natural, everyday spoken Bangladeshi Bengali.';
-
-    const avoidList =
-      Array.isArray(recentTitles) && recentTitles.length > 0
-        ? `Do NOT repeat or copy these recent titles/jokes: ${recentTitles.slice(0, 12).join(' | ')}.`
-        : '';
-
-    const hintInstruction =
-      typeof customHint === 'string' && customHint.trim()
-        ? `User optional vibe/topic hint: "${customHint.trim()}".`
-        : 'Invent a completely fresh, original, viral funny situation automatically with zero user script needed.';
+        ? 'Write witty Bangladeshi Banglish (Bengali words in English letters).'
+        : 'Write natural, witty Bangladeshi colloquial Bengali (বাংলা).';
 
     const ai = getGeminiClient();
-
-    const prompt = `Create a hilarious ${panelCount}-panel stick-figure comic strip for a popular Facebook comedy page called "@@RAFU FOLK@@".
+    const prompt = `Create a ${panelCount}-panel 100% original copyright-free Bengali stick-figure comic strip for "@@RAFU FOLK@@".
 Category: ${chosenCategory}.
-${languageInstruction}
-${hintInstruction}
-${avoidList}
-
-Rules for great stick comics:
-1. Keep every speech bubble super short and punchy (maximum 42 characters per bubble) so it fits cleanly inside a comic speech bubble.
-2. Build up a relatable setup in the early panels and deliver a sharp, unexpected comedic twist or deadpan punchline in the final panel.
-3. Each panel must have 1 or 2 characters from these IDs: "rafu" (spiky hair), "folk" (glasses), "boss" (tie), "chacha" (mustache & topi), "friend" (cap).
-4. Vary expressions ("happy", "laughing", "shocked", "angry", "deadpan", "confused", "crying", "smug", "wink") and poses ("standing", "pointing", "facepalm", "hands_up", "shrugging", "holding_phone", "holding_tea", "sitting_desk", "running") so each panel feels visually alive!
-5. Write an engaging, natural-sounding Facebook Page post caption ("fbCaption") in 1-2 short conversational lines with a playful question for comments and 1-2 natural hashtags (never spammy).
-6. Return exact panel count: ${panelCount} panels (panelIndex 0 to ${panelCount - 1}).`;
+${customHint ? `Topic hint: "${String(customHint).trim()}".` : ''}
+${langRule}
+Keep speeches short (max 42 characters). Write an engaging Facebook caption with 2-3 hashtags.`;
 
     const response = await generateJsonWithRetryAndFallback({
       ai,
       contents: prompt,
       systemInstruction:
-        'You are a top Bengali humorist and stick-figure comic writer for "@@RAFU FOLK@@". Always output strictly valid JSON matching the schema.',
+        'You are a viral Bengali stick-figure comic writer for "@@RAFU FOLK@@". Return strictly valid JSON.',
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          title: {
-            type: Type.STRING,
-            description: 'Short catchy comic strip title (max 38 characters).',
-          },
-          fbCaption: {
-            type: Type.STRING,
-            description: 'Natural human-style Bengali Facebook caption with 1 question and 1-2 hashtags.',
-          },
+          title: { type: Type.STRING },
+          fbCaption: { type: Type.STRING },
           panels: {
             type: Type.ARRAY,
             items: {
               type: Type.OBJECT,
               properties: {
                 panelIndex: { type: Type.INTEGER },
-                captionTop: {
-                  type: Type.STRING,
-                  description: 'Optional very short scene note like "সকাল ৯টা" or empty string.',
-                },
+                captionTop: { type: Type.STRING },
                 sceneProp: {
                   type: Type.STRING,
                   enum: [
@@ -305,6 +274,11 @@ Rules for great stick comics:
                     'clock',
                     'book',
                     'heart',
+                    'sweat',
+                    'anger_vein',
+                    'question',
+                    'exclamation',
+                    'lightbulb',
                   ],
                 },
                 moodFx: {
@@ -358,10 +332,7 @@ Rules for great stick comics:
                           'running',
                         ],
                       },
-                      speech: {
-                        type: Type.STRING,
-                        description: 'Short witty dialogue (max 42 characters).',
-                      },
+                      speech: { type: Type.STRING },
                       thought: { type: Type.BOOLEAN },
                     },
                     required: ['id', 'name', 'side', 'expression', 'pose'],
@@ -380,10 +351,8 @@ Rules for great stick comics:
     if (!rawText) {
       return res.status(502).json({ error: 'AI থেকে খালি উত্তর এসেছে। আবার চেষ্টা করুন।' });
     }
-
     const parsed = JSON.parse(rawText);
-
-    const comicScript = {
+    return res.json({
       id: `rf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       title: String(parsed.title || 'রাফু ও ফোকের কাণ্ড'),
       category: chosenCategory,
@@ -393,9 +362,7 @@ Rules for great stick comics:
       fbCaption: String(parsed.fbCaption || 'কার সাথে এমন হয়েছে? কমেন্টে জানান!'),
       createdAt: new Date().toISOString(),
       seed: Math.floor(Math.random() * 900000) + 100000,
-    };
-
-    return res.json(comicScript);
+    });
   } catch (err) {
     const friendly = formatFriendlyGeminiError(err);
     console.error('Generate comic error:', err);
@@ -404,6 +371,10 @@ Rules for great stick comics:
 });
 
 const VALID_VIDEO_THEMES = [
+  'bathroom_rush',
+  'room_door',
+  'bedroom_night',
+  'exam_hall',
   'rain_storm',
   'desert_sun',
   'office_drama',
@@ -416,11 +387,12 @@ app.post('/api/generate-video', async (req, res) => {
     const {
       category = 'auto',
       theme = 'auto',
+      renderStyle = 'stick_meme',
       aspectRatio = '9:16',
       dialogueMode = 'bangla',
-      musicStyle = 'comedy',
+      musicStyle = 'cinematic_parody',
       storyArc = 'viral_story',
-      targetDurationSec = 26,
+      targetDurationSec = 22,
       customHint = '',
       recentTitles = [],
     } = req.body ?? {};
@@ -429,66 +401,81 @@ app.post('/api/generate-video', async (req, res) => {
       category === 'auto'
         ? CATEGORY_POOL[Math.floor(Math.random() * CATEGORY_POOL.length)]
         : String(category);
-
+    const safeRenderStyle = renderStyle === 'cartoon_2d' ? 'cartoon_2d' : 'stick_meme';
     const safeAspect = aspectRatio === '1:1' ? '1:1' : '9:16';
-    const safeMusic = ['comedy', 'quirky', 'dramatic', 'none'].includes(String(musicStyle))
+    const safeMusic = [
+      'comedy',
+      'quirky',
+      'dramatic',
+      'cinematic_parody',
+      'none',
+    ].includes(String(musicStyle))
       ? musicStyle
-      : 'comedy';
+      : 'cinematic_parody';
+
     const isViralArc = storyArc === 'viral_story';
     const desiredSec = isViralArc
-      ? Math.max(18, Math.min(45, Number(targetDurationSec) || 26))
-      : Math.max(8, Math.min(15, Number(targetDurationSec) || 12));
-    const sceneCount = isViralArc ? 5 : 3;
+      ? Math.max(16, Math.min(36, Number(targetDurationSec) || 22))
+      : Math.max(9, Math.min(16, Number(targetDurationSec) || 13));
+    const sceneCount = isViralArc ? 4 : 3;
+
+    const styleGuidance =
+      safeRenderStyle === 'stick_meme'
+        ? `STYLE: Viral Black-and-White Stick-Figure Comedy Meme Short (like Bangladeshi meme reels!).
+Use rooms/themes: "room_door", "bathroom_rush", "bedroom_night", "exam_hall".
+Use hilarious stick-figure meme actions: "knock_door", "desperate_squeeze", "scream_jaw", "dramatic_closeup", "door_peek", "collapsed_mess", "shocked_jump", "eye_pop", "facepalm", "hands_up".
+Use stick props: "door_closed", "door_open", "toilet_squat", "splat_mess", "smartphone", "money", "clock", "none".
+Include 1 split-screen scene (splitScreen: true) when two friends argue from different sides, and 1 dramatic parody close-up scene (action: "dramatic_closeup", voiceEffect: "dramatic_boss", sfx: "dramatic_boom") with an original copyright-free heroic movie-parody Bengali dialogue!`
+        : `STYLE: Colorful 2D Bengali Comedy Cartoon Short.
+Use themes: "tea_stall", "office_drama", "rain_storm", "desert_sun", "street_night".`;
 
     const themeInstruction =
-      theme !== 'auto' && VALID_THEMES.includes(theme)
-        ? `Start or center the story in theme "${theme}" (you may switch theme on a twist scene if funny).`
-        : 'Pick vivid visual themes from: "rain_storm", "desert_sun", "office_drama", "tea_stall", "street_night" — changing themes across scenes when the plot jumps in time/place!';
+      theme !== 'auto' && VALID_VIDEO_THEMES.includes(theme as (typeof VALID_VIDEO_THEMES)[number])
+        ? `Center the story around theme "${theme}" (or switch themes cleanly if the punchline moves locations).`
+        : '';
 
     const dialogueInstruction =
       dialogueMode === 'silent'
-        ? 'Silent slapstick mode: set every character speech to empty string "" and convey the entire joke via exaggerated actions, props, expressions, and SFX.'
-        : 'Spoken Bengali AI Voiceover mode: write natural, conversational Bangladeshi Bengali dialogues (45–85 characters per speaking line, NO emojis inside speech text so TTS reads smoothly!). Keep 1 or 2 characters speaking per scene.';
+        ? 'Silent slapstick mode: set every character speech to "" and convey humor visually + SFX.'
+        : 'Spoken Bengali AI Dubbing mode: write natural, punchy Bangladeshi Bengali dialogues (35–80 chars per line, NO emojis inside speech text so voice synthesis reads naturally!). Assign appropriate voiceEffect per character: "panicked" (urgent desperate friend), "dramatic_boss" (deep cinematic parody hero/villain line), "cartoon_high" (funny squeaky punchline), or "normal".';
 
     const avoidList =
       Array.isArray(recentTitles) && recentTitles.length > 0
-        ? `Avoid repeating these recent stories: ${recentTitles.slice(0, 10).join(' | ')}.`
+        ? `Avoid repeating recent stories: ${recentTitles.slice(0, 8).join(' | ')}.`
         : '';
 
     const hintInstruction =
       typeof customHint === 'string' && customHint.trim()
         ? `User story idea: "${customHint.trim()}".`
-        : 'Invent a viral, relatable Bengali comedy mini-story automatically with a hook in Scene 1, funny escalation in the middle scenes, and a hilarious karmic twist punchline at the end!';
+        : 'Invent a super relatable, 100% original & copyright-free Bangladeshi friend comedy situation (e.g. bathroom emergency, hostel food theft, borrowing money, exam cheating panic, sudden rain/power cut) with an unexpected hilarious twist at the end!';
 
     const ai = getGeminiClient();
-
-    const prompt = `Create a ${sceneCount}-scene animated 2D cartoon comedy video storyboard (~${desiredSec} seconds total) for "@@RAFU FOLK@@" Facebook Reels.
+    const prompt = `Create a ${sceneCount}-scene animated comedy video storyboard (~${desiredSec} seconds total) for "@@RAFU FOLK@@".
 Category: ${chosenCategory}.
+${styleGuidance}
 ${themeInstruction}
 ${dialogueInstruction}
 ${hintInstruction}
 ${avoidList}
 
-Rules:
-1. Return exactly ${sceneCount} scenes (sceneIndex 0 to ${sceneCount - 1}). Total duration should be around ${desiredSec}s (each scene 3.5s to 7.0s).
-2. Each scene MUST specify:
-   - theme: "rain_storm" | "desert_sun" | "office_drama" | "tea_stall" | "street_night"
-   - camera: "wide" | "zoom_left" | "zoom_right" | "zoom_center" | "shake"
-   - sfx: "none" | "laugh" | "gasp" | "thunder" | "pour" | "punchline" | "pop" | "sad_trombone"
-   - captionTop: short Bengali scene header (e.g., "সকাল ১০টা · চা-দোকান")
-   - characters (1 or 2 characters): id ("rafu", "folk", "boss", "chacha", "friend"), name (Bengali name), side ("left" or "right"), expression, action, prop, speech (clean natural Bengali without emojis).
-3. Make the characters visually active using actions ("walk_in", "laugh", "point_laugh", "panting", "shocked_jump", "eye_pop", "facepalm", "hands_up", "pour_water", "sip_tea", "run", "idle") and props ("umbrella_normal", "umbrella_upside_down", "broken_umbrella", "water_tap_glass", "tea_cup", "smartphone", "money", "laptop", "clock", "none").
-4. Write an engaging Facebook Reels caption ("fbCaption") with 1 comment-bait question and 2-3 natural hashtags.`;
+CRITICAL COPYRIGHT RULE:
+Everything MUST be 100% original and copyright-free! Do NOT quote copyrighted movie scripts or songs verbatim; write original funny Bengali parody lines instead.
+
+Also generate:
+- title: short catchy Bengali title
+- hookBanner: short viral 3-6 word Bengali meme hook for the top white box (e.g., "বন্ধুর যখন বাথরুম চাপ দেয় 🤣")
+- fbCaption: engaging Facebook Reels caption with a question and 2-3 hashtags.`;
 
     const response = await generateJsonWithRetryAndFallback({
       ai,
       contents: prompt,
       systemInstruction:
-        'You are a viral Bengali 2D cartoon animation director for "@@RAFU FOLK@@". Return strictly valid JSON matching the schema.',
+        'You are a viral Bengali stick-figure comedy animation director. Return strictly valid JSON matching the schema.',
       responseSchema: {
         type: Type.OBJECT,
         properties: {
           title: { type: Type.STRING },
+          hookBanner: { type: Type.STRING },
           fbCaption: { type: Type.STRING },
           scenes: {
             type: Type.ARRAY,
@@ -499,7 +486,7 @@ Rules:
                 durationSec: { type: Type.NUMBER },
                 theme: {
                   type: Type.STRING,
-                  enum: ['rain_storm', 'desert_sun', 'office_drama', 'tea_stall', 'street_night'],
+                  enum: [...VALID_VIDEO_THEMES],
                 },
                 camera: {
                   type: Type.STRING,
@@ -509,6 +496,11 @@ Rules:
                   type: Type.STRING,
                   enum: [
                     'none',
+                    'knock_door',
+                    'dramatic_boom',
+                    'scream_sting',
+                    'door_creak',
+                    'splat_funny',
                     'laugh',
                     'gasp',
                     'thunder',
@@ -519,6 +511,7 @@ Rules:
                   ],
                 },
                 captionTop: { type: Type.STRING },
+                splitScreen: { type: Type.BOOLEAN },
                 characters: {
                   type: Type.ARRAY,
                   items: {
@@ -560,12 +553,22 @@ Rules:
                           'pour_water',
                           'sip_tea',
                           'run',
+                          'knock_door',
+                          'desperate_squeeze',
+                          'scream_jaw',
+                          'door_peek',
+                          'collapsed_mess',
+                          'dramatic_closeup',
                         ],
                       },
                       prop: {
                         type: Type.STRING,
                         enum: [
                           'none',
+                          'door_closed',
+                          'door_open',
+                          'toilet_squat',
+                          'splat_mess',
                           'umbrella_normal',
                           'umbrella_upside_down',
                           'broken_umbrella',
@@ -577,6 +580,10 @@ Rules:
                           'clock',
                         ],
                       },
+                      voiceEffect: {
+                        type: Type.STRING,
+                        enum: ['normal', 'panicked', 'dramatic_boss', 'cartoon_high'],
+                      },
                       speech: { type: Type.STRING },
                     },
                     required: ['id', 'name', 'side', 'expression', 'action', 'prop'],
@@ -587,7 +594,7 @@ Rules:
             },
           },
         },
-        required: ['title', 'fbCaption', 'scenes'],
+        required: ['title', 'hookBanner', 'fbCaption', 'scenes'],
       },
     });
 
@@ -597,61 +604,36 @@ Rules:
     }
 
     const parsed = JSON.parse(rawText);
-    const rawScenes = Array.isArray(parsed.scenes) ? parsed.scenes.slice(0, 6) : [];
-    const normalizedScenes = rawScenes.map((sc: Record<string, unknown>, idx: number) => ({
-      sceneIndex: idx,
-      durationSec: Math.max(3.0, Math.min(7.5, Number(sc.durationSec) || 4.5)),
-      theme: VALID_VIDEO_THEMES.includes(sc.theme as (typeof VALID_VIDEO_THEMES)[number])
-        ? sc.theme
-        : 'tea_stall',
-      camera: ['wide', 'zoom_left', 'zoom_right', 'zoom_center', 'shake'].includes(
-        String(sc.camera)
-      )
-        ? sc.camera
-        : 'wide',
-      sfx: [
-        'none',
-        'laugh',
-        'gasp',
-        'thunder',
-        'pour',
-        'punchline',
-        'pop',
-        'sad_trombone',
-      ].includes(String(sc.sfx))
-        ? sc.sfx
-        : 'pop',
-      captionTop: typeof sc.captionTop === 'string' ? sc.captionTop.slice(0, 48) : '',
-      characters: Array.isArray(sc.characters)
-        ? sc.characters.slice(0, 2).map((ch: Record<string, unknown>) => ({
-            ...ch,
-            speech: dialogueMode === 'silent' ? '' : String(ch.speech || '').slice(0, 95),
-          }))
-        : [],
-    }));
+    const scenes = (Array.isArray(parsed.scenes) ? parsed.scenes : [])
+      .slice(0, sceneCount)
+      .map((sc: Record<string, unknown>, idx: number) => ({
+        ...sc,
+        sceneIndex: idx,
+        durationSec: Math.max(3.0, Math.min(7.5, Number(sc.durationSec) || 4.5)),
+      }));
 
     const totalDurationSec = Number(
-      normalizedScenes
-        .reduce((sum: number, s: { durationSec: number }) => sum + s.durationSec, 0)
+      scenes
+        .reduce((acc: number, s: { durationSec: number }) => acc + s.durationSec, 0)
         .toFixed(1)
     );
 
-    const videoScript = {
-      id: `rfv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      title: String(parsed.title || 'রাফুর মজার কাণ্ড'),
+    return res.json({
+      id: `vid_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      title: String(parsed.title || 'বন্ধুর মজার কাণ্ড'),
+      hookBanner: String(parsed.hookBanner || parsed.title || 'বন্ধুর যখন এমন হয় 🤣'),
       category: chosenCategory,
+      renderStyle: safeRenderStyle,
       aspectRatio: safeAspect,
       musicStyle: safeMusic,
       storyArc: isViralArc ? 'viral_story' : 'quick_short',
-      subtitleStyle: 'reels_bold',
+      subtitleStyle: safeRenderStyle === 'stick_meme' ? 'meme_clean' : 'reels_bold',
       totalDurationSec,
-      scenes: normalizedScenes,
-      fbCaption: String(parsed.fbCaption || 'কার সাথে এমন হয়েছে? 😂 #RafuFolk #BanglaCartoon'),
+      scenes,
+      fbCaption: String(parsed.fbCaption || 'কার সাথে এমন হয়েছে? 😂 #RafuFolk #BanglaMeme'),
       createdAt: new Date().toISOString(),
       seed: Math.floor(Math.random() * 900000) + 100000,
-    };
-
-    return res.json(videoScript);
+    });
   } catch (err) {
     const friendly = formatFriendlyGeminiError(err);
     console.error('Generate video error:', err);
@@ -659,51 +641,38 @@ Rules:
   }
 });
 
-// Character voice persona profiles for Edge TTS (free neural Bengali) & Gemini TTS
+/* ============================================================================
+ * COPYRIGHT-FREE AI VOICE DUBBING & DRAMATIC FFmpeg VOICE FX
+ * ========================================================================== */
+
 const CHARACTER_VOICE_MAP: Record<
   string,
-  {
-    edgeVoice: string;
-    edgePitch: string;
-    edgeRate: string;
-    geminiVoice: string;
-    geminiStyle: string;
-  }
+  { edgeVoice: string; geminiVoice: string; geminiStyle: string }
 > = {
   rafu: {
     edgeVoice: 'bn-BD-PradeepNeural',
-    edgePitch: '+12Hz',
-    edgeRate: '+10%',
     geminiVoice: 'Puck',
-    geminiStyle: 'Energetic, witty young Bangladeshi male speaking expressive Bengali',
+    geminiStyle: 'Animated, energetic young Bangladeshi male voice',
   },
   folk: {
     edgeVoice: 'bn-BD-PradeepNeural',
-    edgePitch: '-6Hz',
-    edgeRate: '+0%',
     geminiVoice: 'Charon',
-    geminiStyle: 'Calm, deadpan clever Bangladeshi male speaking crisp Bengali',
+    geminiStyle: 'Deadpan or dramatic witty Bangladeshi male voice',
   },
   boss: {
     edgeVoice: 'bn-BD-PradeepNeural',
-    edgePitch: '-24Hz',
-    edgeRate: '-4%',
     geminiVoice: 'Fenrir',
-    geminiStyle: 'Deep, authoritative, slightly irritated Bangladeshi office boss',
+    geminiStyle: 'Deep authoritative bossy Bangladeshi voice',
   },
   chacha: {
     edgeVoice: 'bn-BD-PradeepNeural',
-    edgePitch: '-16Hz',
-    edgeRate: '-6%',
-    geminiVoice: 'Fenrir',
-    geminiStyle: 'Playful, senior Bangladeshi tea-stall uncle with warm humor',
+    geminiVoice: 'Charon',
+    geminiStyle: 'Warm elderly Bangladeshi tea-stall uncle voice',
   },
   friend: {
     edgeVoice: 'bn-BD-NabanitaNeural',
-    edgePitch: '+6Hz',
-    edgeRate: '+8%',
     geminiVoice: 'Kore',
-    geminiStyle: 'Lively, expressive Bangladeshi friend speaking natural Bengali',
+    geminiStyle: 'Lively expressive Bangladeshi friend voice',
   },
 };
 
@@ -714,66 +683,83 @@ function stripEmojisForTts(text: string): string {
     .trim();
 }
 
-function getWavDurationSec(wavBuffer: Buffer): number {
-  try {
-    if (wavBuffer.length > 44 && wavBuffer.toString('ascii', 0, 4) === 'RIFF') {
-      const byteRate = wavBuffer.readUInt32LE(28);
-      if (byteRate > 0) {
-        return Math.max(0.8, (wavBuffer.length - 44) / byteRate);
-      }
-    }
-  } catch {
-    // fallback
-  }
-  return 2.0;
+function getWavDurationSec(buf: Buffer): number {
+  if (buf.length < 44) return 2.5;
+  const byteRate = buf.readUInt32LE(28);
+  const dataSize = buf.readUInt32LE(40);
+  if (!byteRate || !dataSize) return 2.5;
+  return Math.max(0.6, dataSize / byteRate);
 }
 
-async function getAudioDurationWithFfmpeg(audioBuffer: Buffer, ext: 'mp3' | 'wav'): Promise<number> {
-  if (ext === 'wav') {
-    return getWavDurationSec(audioBuffer);
-  }
-  const tmpFile = path.join(os.tmpdir(), `rafu-dur-${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`);
+async function getAudioDurationWithFfmpeg(buf: Buffer, ext: 'mp3' | 'wav'): Promise<number> {
+  const tmpPath = path.join(os.tmpdir(), `dur_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`);
+  await fs.writeFile(tmpPath, buf);
   try {
-    await fs.writeFile(tmpFile, audioBuffer);
     const stderr = await new Promise<string>((resolve) => {
-      const proc = spawn(FFMPEG_PATH, ['-i', tmpFile, '-f', 'null', '-']);
-      let errOut = '';
-      proc.stderr.on('data', (chunk) => {
-        errOut += chunk.toString();
+      const proc = spawn(FFMPEG_PATH, ['-i', tmpPath]);
+      let log = '';
+      proc.stderr.on('data', (d) => {
+        log += String(d);
       });
-      proc.on('close', () => resolve(errOut));
+      proc.on('close', () => resolve(log));
       proc.on('error', () => resolve(''));
     });
-    const match = stderr.match(/Duration:\s+(\d+):(\d+):(\d+\.\d+)/);
-    if (match) {
-      const hours = Number(match[1]);
-      const mins = Number(match[2]);
-      const secs = Number(match[3]);
-      return Math.max(0.7, hours * 3600 + mins * 60 + secs);
+    const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+    if (m) {
+      return Math.max(0.6, Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]));
     }
-  } catch {
-    // Fallback estimate: 48kbps mono MP3 -> 6000 bytes/sec
+    return 2.6;
   } finally {
-    await fs.unlink(tmpFile).catch(() => {});
+    await fs.unlink(tmpPath).catch(() => {});
   }
-  return Math.max(0.8, audioBuffer.length / 6000);
 }
 
-async function pitchShiftMp3WithFfmpeg(
-  mp3Buffer: Buffer,
-  pitchFactor: number,
-  tempoFactor: number
+async function applyVoiceFxWithFfmpeg(
+  rawBuffer: Buffer,
+  inputExt: 'mp3' | 'wav',
+  characterId: string,
+  voiceEffect: string
 ): Promise<Buffer> {
-  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const inPath = path.join(os.tmpdir(), `rafu-tts-in-${id}.mp3`);
-  const outPath = path.join(os.tmpdir(), `rafu-tts-out-${id}.mp3`);
-  await fs.writeFile(inPath, mp3Buffer);
+  let pitch = 1.0;
+  let tempo = 1.0;
+  let extraFilters = '';
+
+  if (voiceEffect === 'panicked') {
+    pitch = 1.13;
+    tempo = 1.15;
+  } else if (voiceEffect === 'dramatic_boss') {
+    pitch = 0.78;
+    tempo = 0.92;
+    extraFilters = ',bass=g=6:f=110,aecho=0.8:0.75:48:0.36';
+  } else if (voiceEffect === 'cartoon_high') {
+    pitch = 1.22;
+    tempo = 1.09;
+  } else {
+    const defaults: Record<string, { p: number; t: number }> = {
+      rafu: { p: 1.07, t: 1.06 },
+      folk: { p: 0.96, t: 1.0 },
+      boss: { p: 0.84, t: 0.96 },
+      chacha: { p: 0.88, t: 0.95 },
+      friend: { p: 1.08, t: 1.06 },
+    };
+    const d = defaults[characterId] || { p: 1.0, t: 1.0 };
+    pitch = d.p;
+    tempo = d.t;
+  }
+
+  if (pitch === 1.0 && tempo === 1.0 && !extraFilters) {
+    return rawBuffer;
+  }
+
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const inPath = path.join(os.tmpdir(), `vfx_in_${id}.${inputExt}`);
+  const outPath = path.join(os.tmpdir(), `vfx_out_${id}.mp3`);
+  await fs.writeFile(inPath, rawBuffer);
 
   try {
-    // Shift pitch cleanly using asetrate + aresample + atempo to preserve natural speed
-    const clampedPitch = Math.max(0.72, Math.min(1.32, pitchFactor));
-    const compensatingTempo = Math.max(0.65, Math.min(1.6, tempoFactor / clampedPitch));
-    const filterChain = `asetrate=24000*${clampedPitch.toFixed(3)},aresample=24000,atempo=${compensatingTempo.toFixed(3)}`;
+    const clampedPitch = Math.max(0.72, Math.min(1.32, pitch));
+    const compensatingTempo = Math.max(0.65, Math.min(1.6, tempo / clampedPitch));
+    const filterChain = `asetrate=24000*${clampedPitch.toFixed(3)},aresample=24000,atempo=${compensatingTempo.toFixed(3)}${extraFilters}`;
 
     await new Promise<void>((resolve, reject) => {
       const proc = spawn(FFMPEG_PATH, [
@@ -793,7 +779,7 @@ async function pitchShiftMp3WithFfmpeg(
       proc.on('error', reject);
       proc.on('close', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`FFmpeg pitch shift exited ${code}`));
+        else reject(new Error(`FFmpeg voice FX exited ${code}`));
       });
     });
 
@@ -806,62 +792,42 @@ async function pitchShiftMp3WithFfmpeg(
 
 async function synthesizeWithFreeBengaliTts(
   text: string,
-  characterId: string
+  characterId: string,
+  voiceEffect: string
 ): Promise<{ buffer: Buffer; mime: string; durationSec: number }> {
-  // Split long sentences safely under 180 chars for free Bengali TTS endpoint
   const chunksText = text.length <= 180 ? [text] : text.match(/.{1,170}(\s|$)/g) || [text];
   const rawParts: Buffer[] = [];
-
   for (const part of chunksText) {
     const q = part.trim();
     if (!q) continue;
     const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(q)}&tl=bn&client=tw-ob`;
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-      },
-    });
-    if (!res.ok) {
-      throw new Error(`Free Bengali TTS HTTP ${res.status}`);
-    }
-    const arr = await res.arrayBuffer();
-    rawParts.push(Buffer.from(arr));
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!res.ok) throw new Error(`Free Bengali TTS HTTP ${res.status}`);
+    rawParts.push(Buffer.from(await res.arrayBuffer()));
   }
-
   const rawBuffer = Buffer.concat(rawParts);
-  if (rawBuffer.length < 128) {
-    throw new Error('Empty Bengali TTS output');
-  }
-
-  // Distinct character cartoon voice shaping via FFmpeg
-  const voiceShape: Record<string, { pitch: number; tempo: number }> = {
-    rafu: { pitch: 1.12, tempo: 1.12 },
-    folk: { pitch: 0.96, tempo: 1.02 },
-    boss: { pitch: 0.80, tempo: 0.98 },
-    chacha: { pitch: 0.86, tempo: 0.95 },
-    friend: { pitch: 1.18, tempo: 1.14 },
-  };
-  const shape = voiceShape[characterId] || { pitch: 1.05, tempo: 1.06 };
+  if (rawBuffer.length < 128) throw new Error('Empty Bengali TTS output');
 
   let finalBuffer: Buffer = rawBuffer;
   try {
-    finalBuffer = await pitchShiftMp3WithFfmpeg(rawBuffer, shape.pitch, shape.tempo);
+    finalBuffer = Buffer.from(
+      await applyVoiceFxWithFfmpeg(rawBuffer, 'mp3', characterId, voiceEffect)
+    );
   } catch {
     finalBuffer = rawBuffer;
   }
-
   const durationSec = await getAudioDurationWithFfmpeg(finalBuffer, 'mp3');
   return { buffer: finalBuffer, mime: 'audio/mpeg', durationSec };
 }
 
 async function synthesizeWithEdgeTts(
   text: string,
-  characterId: string
+  characterId: string,
+  voiceEffect: string
 ): Promise<{ buffer: Buffer; mime: string; durationSec: number }> {
   const persona = CHARACTER_VOICE_MAP[characterId] || CHARACTER_VOICE_MAP.rafu;
   const tts = new MsEdgeTTS();
   await tts.setMetadata(persona.edgeVoice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-
   const { audioStream } = tts.toStream(text);
   const chunks: Buffer[] = [];
   await new Promise<void>((resolve, reject) => {
@@ -879,40 +845,37 @@ async function synthesizeWithEdgeTts(
   tts.close();
 
   const rawBuffer = Buffer.concat(chunks);
-  if (rawBuffer.length < 128) {
-    throw new Error('Empty Edge TTS audio output');
-  }
+  if (rawBuffer.length < 128) throw new Error('Empty Edge TTS audio');
 
-  const voiceShape: Record<string, { pitch: number; tempo: number }> = {
-    rafu: { pitch: 1.09, tempo: 1.08 },
-    folk: { pitch: 0.96, tempo: 1.0 },
-    boss: { pitch: 0.84, tempo: 0.96 },
-    chacha: { pitch: 0.88, tempo: 0.94 },
-    friend: { pitch: 1.06, tempo: 1.08 },
-  };
-  const shape = voiceShape[characterId] || { pitch: 1.0, tempo: 1.0 };
   let finalBuffer: Buffer = rawBuffer;
-  if (shape.pitch !== 1.0 || shape.tempo !== 1.0) {
-    try {
-      finalBuffer = await pitchShiftMp3WithFfmpeg(rawBuffer, shape.pitch, shape.tempo);
-    } catch {
-      finalBuffer = rawBuffer;
-    }
+  try {
+    finalBuffer = Buffer.from(
+      await applyVoiceFxWithFfmpeg(rawBuffer, 'mp3', characterId, voiceEffect)
+    );
+  } catch {
+    finalBuffer = rawBuffer;
   }
-
   const durationSec = await getAudioDurationWithFfmpeg(finalBuffer, 'mp3');
   return { buffer: finalBuffer, mime: 'audio/mpeg', durationSec };
 }
 
 async function synthesizeWithGeminiTts(
   text: string,
-  characterId: string
+  characterId: string,
+  voiceEffect: string
 ): Promise<{ buffer: Buffer; mime: string; durationSec: number }> {
   const persona = CHARACTER_VOICE_MAP[characterId] || CHARACTER_VOICE_MAP.rafu;
+  const styleHint =
+    voiceEffect === 'dramatic_boss'
+      ? 'Deep cinematic heroic movie dubbing style, dramatic pause and intense bass delivery'
+      : voiceEffect === 'panicked'
+        ? 'Urgent, panicked, desperate fast comedic delivery'
+        : persona.geminiStyle;
+
   const ai = getGeminiClient();
   const response = await ai.models.generateContent({
     model: 'gemini-3.8-flash-lite-tts',
-    contents: `${persona.geminiStyle}. Speak clearly in natural Bengali: ${text}`,
+    contents: `${styleHint}. Speak naturally in Bangladeshi Bengali: ${text}`,
     config: {
       responseModalities: ['AUDIO'],
       speechConfig: {
@@ -926,12 +889,20 @@ async function synthesizeWithGeminiTts(
   });
 
   const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-  if (!base64Audio) {
-    throw new Error('Empty Gemini TTS audio output');
+  if (!base64Audio) throw new Error('Empty Gemini TTS audio output');
+  const rawBuffer = Buffer.from(base64Audio, 'base64');
+
+  if (voiceEffect === 'dramatic_boss' || voiceEffect === 'panicked' || voiceEffect === 'cartoon_high') {
+    try {
+      const fxBuffer = await applyVoiceFxWithFfmpeg(rawBuffer, 'wav', characterId, voiceEffect);
+      const durationSec = await getAudioDurationWithFfmpeg(fxBuffer, 'mp3');
+      return { buffer: fxBuffer, mime: 'audio/mpeg', durationSec };
+    } catch {
+      // fallback to raw wav
+    }
   }
-  const buffer = Buffer.from(base64Audio, 'base64');
-  const durationSec = getWavDurationSec(buffer);
-  return { buffer, mime: 'audio/wav', durationSec };
+  const durationSec = getWavDurationSec(rawBuffer);
+  return { buffer: rawBuffer, mime: 'audio/wav', durationSec };
 }
 
 app.post('/api/video/synthesize-voices', async (req, res) => {
@@ -963,42 +934,47 @@ app.post('/api/video/synthesize-voices', async (req, res) => {
           id: string;
           name: string;
           speech?: string;
+          voiceEffect?: string;
+          customAudioDataUrl?: string;
         }>;
       };
+
       const chars = Array.isArray(sc.characters) ? sc.characters : [];
       let sceneCursor = 0.25;
 
       for (let cIdx = 0; cIdx < chars.length; cIdx++) {
         const ch = chars[cIdx];
+        if (ch.customAudioDataUrl) {
+          sceneCursor += 1.5;
+          continue;
+        }
         const rawSpeech = String(ch.speech || '').trim();
         const cleanSpeech = stripEmojisForTts(rawSpeech);
         if (!cleanSpeech) continue;
 
+        const effect = String(ch.voiceEffect || 'normal');
         let synth: { buffer: Buffer; mime: string; durationSec: number } | null = null;
         let usedProvider: 'edge_tts' | 'gemini_tts' = 'edge_tts';
 
         if (voiceEngine === 'gemini_tts' && process.env.GEMINI_API_KEY) {
           try {
-            synth = await synthesizeWithGeminiTts(cleanSpeech, ch.id);
+            synth = await synthesizeWithGeminiTts(cleanSpeech, ch.id, effect);
             usedProvider = 'gemini_tts';
-          } catch (gemErr) {
-            console.warn('Gemini TTS fallback to Edge/Free TTS:', extractGeminiErrorInfo(gemErr).message);
+          } catch {
             try {
-              synth = await synthesizeWithEdgeTts(cleanSpeech, ch.id);
+              synth = await synthesizeWithEdgeTts(cleanSpeech, ch.id, effect);
               usedProvider = 'edge_tts';
             } catch {
-              synth = await synthesizeWithFreeBengaliTts(cleanSpeech, ch.id);
+              synth = await synthesizeWithFreeBengaliTts(cleanSpeech, ch.id, effect);
               usedProvider = 'edge_tts';
             }
           }
         } else {
-          // 'auto': Neural Edge TTS (bn-BD-PradeepNeural / NabanitaNeural) -> instant Free Bengali TTS fallback
           try {
-            synth = await synthesizeWithEdgeTts(cleanSpeech, ch.id);
+            synth = await synthesizeWithEdgeTts(cleanSpeech, ch.id, effect);
             usedProvider = 'edge_tts';
-          } catch (edgeErr) {
-            console.warn('Edge TTS failed, falling back to Free Bengali TTS:', edgeErr);
-            synth = await synthesizeWithFreeBengaliTts(cleanSpeech, ch.id);
+          } catch {
+            synth = await synthesizeWithFreeBengaliTts(cleanSpeech, ch.id, effect);
             usedProvider = 'edge_tts';
           }
         }
@@ -1020,72 +996,42 @@ app.post('/api/video/synthesize-voices', async (req, res) => {
         }
       }
 
-      // Auto-expand scene duration if voice dialogue needs more time so speech never cuts off
-      const minRequired = Number((sceneCursor + 0.35).toFixed(1));
-      if (minRequired > Number(sc.durationSec || 0)) {
-        sc.durationSec = minRequired;
+      if (sceneCursor > sc.durationSec) {
+        sc.durationSec = Number(Math.min(12.0, sceneCursor + 0.3).toFixed(1));
       }
     }
 
-    const totalDurationSec = Number(
-      updatedScenes
-        .reduce((sum: number, s: { durationSec?: number }) => sum + Number(s.durationSec || 4), 0)
-        .toFixed(1)
-    );
-
-    return res.json({
-      voiceClips,
-      scenes: updatedScenes,
-      totalDurationSec,
-    });
+    return res.json({ voiceClips, scenes: updatedScenes });
   } catch (err) {
     console.error('Voice synthesis error:', err);
-    return res.status(500).json({
-      error: err instanceof Error ? err.message : 'বাংলা AI ভয়েস তৈরি করা যায়নি।',
-    });
+    return res.status(500).json({ error: 'ভয়েস ডাবিং তৈরি করা যায়নি।' });
   }
 });
 
-function detectVideoFormat(
-  file: Express.Multer.File
-): 'mp4' | 'webm' | 'quicktime' | null {
-  const baseMime = String(file.mimetype || '').split(';')[0].trim().toLowerCase();
-  if (baseMime === 'video/mp4') return 'mp4';
-  if (baseMime === 'video/webm') return 'webm';
-  if (baseMime === 'video/quicktime') return 'quicktime';
+/* ============================================================================
+ * FFMPEG MP4 TRANSCODING + PERSISTENT VIDEO DISK STORAGE
+ * ========================================================================== */
 
-  const ext = path.extname(String(file.originalname || '')).toLowerCase();
-  if (ext === '.mp4' || ext === '.m4v') return 'mp4';
-  if (ext === '.webm') return 'webm';
-  if (ext === '.mov') return 'quicktime';
-
-  // Magic-byte inspection when browser sends application/octet-stream
-  const buf = file.buffer;
-  if (buf && buf.length >= 12) {
-    if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
-      return 'webm';
-    }
-    if (buf.toString('ascii', 4, 8) === 'ftyp') {
-      return 'mp4';
-    }
-  }
+function detectVideoFormat(file: Express.Multer.File): 'mp4' | 'webm' | null {
+  const mime = (file.mimetype || '').toLowerCase();
+  const name = (file.originalname || '').toLowerCase();
+  if (mime.includes('mp4') || name.endsWith('.mp4')) return 'mp4';
+  if (mime.includes('webm') || name.endsWith('.webm')) return 'webm';
   return null;
 }
 
 async function transcodeBufferToFacebookMp4(
   inputBuffer: Buffer,
-  inputExt: 'mp4' | 'webm' | 'quicktime'
+  inputExt: 'mp4' | 'webm'
 ): Promise<Buffer> {
-  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const inExt = inputExt === 'quicktime' ? 'mov' : inputExt;
-  const inPath = path.join(os.tmpdir(), `rafu-in-${id}.${inExt}`);
-  const outPath = path.join(os.tmpdir(), `rafu-out-${id}.mp4`);
-
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const inPath = path.join(os.tmpdir(), `in_${id}.${inputExt}`);
+  const outPath = path.join(os.tmpdir(), `out_${id}.mp4`);
   await fs.writeFile(inPath, inputBuffer);
 
   try {
     await new Promise<void>((resolve, reject) => {
-      const args = [
+      const proc = spawn(FFMPEG_PATH, [
         '-y',
         '-i',
         inPath,
@@ -1093,36 +1039,26 @@ async function transcodeBufferToFacebookMp4(
         'libx264',
         '-preset',
         'veryfast',
-        '-crf',
-        '23',
         '-pix_fmt',
         'yuv420p',
         '-c:a',
         'aac',
         '-b:a',
         '128k',
-        '-ar',
-        '44100',
         '-movflags',
         '+faststart',
         outPath,
-      ];
-
-      const proc = spawn(FFMPEG_PATH, args);
+      ]);
       let stderr = '';
-      proc.stderr.on('data', (chunk) => {
-        stderr += chunk.toString();
+      proc.stderr.on('data', (d) => {
+        stderr += String(d);
       });
-      proc.on('error', (err) => reject(err));
+      proc.on('error', reject);
       proc.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`FFmpeg transcode failed (code ${code}): ${stderr.slice(-300)}`));
-        }
+        if (code === 0) resolve();
+        else reject(new Error(`FFmpeg exited ${code}: ${stderr.slice(-300)}`));
       });
     });
-
     return await fs.readFile(outPath);
   } finally {
     await fs.unlink(inPath).catch(() => {});
@@ -1136,47 +1072,178 @@ app.post('/api/video/transcode-mp4', uploadVideo.single('video'), async (req, re
     if (!file) {
       return res.status(400).json({ error: 'ভিডিও ফাইল পাওয়া যায়নি।' });
     }
-    const detected = detectVideoFormat(file);
-    if (!detected) {
-      return res.status(400).json({ error: 'কেবল MP4 বা WebM ভিডিও ফাইল সমর্থিত।' });
-    }
+    const detected = detectVideoFormat(file) || 'webm';
+    const mp4Buffer =
+      detected === 'mp4' ? file.buffer : await transcodeBufferToFacebookMp4(file.buffer, detected);
 
-    const mp4Buffer = await transcodeBufferToFacebookMp4(file.buffer, detected);
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Disposition', `attachment; filename="rafu-folk-${Date.now()}.mp4"`);
     return res.send(mp4Buffer);
   } catch (err) {
-    console.error('Transcode MP4 error:', err);
-    return res.status(500).json({
-      error: err instanceof Error ? err.message : 'MP4 কনভার্সন ব্যর্থ হয়েছে।',
-    });
+    console.error('MP4 transcode error:', err);
+    return res.status(500).json({ error: 'MP4 কনভার্শন সম্পন্ন করা যায়নি।' });
   }
 });
+
+// Persistent Saved Rendered Videos API
+app.get('/api/saved-videos', async (_req, res) => {
+  try {
+    const items = await readSavedVideosIndex();
+    return res.json({ videos: items });
+  } catch {
+    return res.json({ videos: [] });
+  }
+});
+
+app.post('/api/saved-videos', uploadVideo.single('video'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'সেইভ করার জন্য ভিডিও ফাইল প্রয়োজন।' });
+    }
+
+    await ensureDataDirs();
+    const {
+      id,
+      videoId,
+      title = '@@RAFU FOLK@@ ভিডিও',
+      category = 'স্টিক ফিগার কমেডি',
+      renderStyle = 'stick_meme',
+      aspectRatio = '9:16',
+      durationSec = '15',
+      fbCaption = '',
+    } = req.body ?? {};
+
+    const cleanId =
+      String(id || `saved_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`).replace(
+        /[^a-zA-Z0-9_-]/g,
+        ''
+      );
+    const detected = detectVideoFormat(file) || 'mp4';
+    let finalBuffer = file.buffer;
+    let ext: 'mp4' | 'webm' = detected;
+    let mimeType = detected === 'mp4' ? 'video/mp4' : 'video/webm';
+
+    if (detected !== 'mp4') {
+      try {
+        finalBuffer = await transcodeBufferToFacebookMp4(file.buffer, detected);
+        ext = 'mp4';
+        mimeType = 'video/mp4';
+      } catch {
+        // Keep original WebM if ffmpeg fallback fails
+      }
+    }
+
+    const fileName = `${cleanId}.${ext}`;
+    const filePath = path.join(SAVED_VIDEOS_DIR, fileName);
+    await fs.writeFile(filePath, finalBuffer);
+
+    const meta: SavedVideoMeta = {
+      id: cleanId,
+      videoId: String(videoId || cleanId),
+      title: String(title),
+      category: String(category),
+      renderStyle: renderStyle === 'cartoon_2d' ? 'cartoon_2d' : 'stick_meme',
+      aspectRatio: aspectRatio === '1:1' ? '1:1' : '9:16',
+      durationSec: Number(durationSec) || 15,
+      sizeBytes: finalBuffer.length,
+      mimeType,
+      createdAt: new Date().toISOString(),
+      fbCaption: String(fbCaption || ''),
+      fileName,
+      serverUrl: `/api/saved-videos/${cleanId}/file`,
+    };
+
+    const existing = await readSavedVideosIndex();
+    const updated = [meta, ...existing.filter((v) => v.id !== cleanId)];
+    await writeSavedVideosIndex(updated);
+
+    return res.json({ saved: meta });
+  } catch (err) {
+    console.error('Save video error:', err);
+    return res.status(500).json({ error: 'ভিডিও সার্ভারে সেইভ করা যায়নি।' });
+  }
+});
+
+app.get('/api/saved-videos/:id/file', async (req, res) => {
+  try {
+    const cleanId = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    const items = await readSavedVideosIndex();
+    const item = items.find((v) => v.id === cleanId);
+    if (!item) {
+      return res.status(404).json({ error: 'ভিডিও পাওয়া যায়নি।' });
+    }
+    const filePath = path.join(SAVED_VIDEOS_DIR, item.fileName);
+    res.setHeader('Content-Type', item.mimeType || 'video/mp4');
+    if (req.query.download === '1') {
+      res.setHeader('Content-Disposition', `attachment; filename="${item.fileName}"`);
+    }
+    return res.sendFile(filePath);
+  } catch {
+    return res.status(404).json({ error: 'ভিডিও ফাইল পাওয়া যায়নি।' });
+  }
+});
+
+app.delete('/api/saved-videos/:id', async (req, res) => {
+  try {
+    const cleanId = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    const items = await readSavedVideosIndex();
+    const target = items.find((v) => v.id === cleanId);
+    if (target) {
+      await fs.unlink(path.join(SAVED_VIDEOS_DIR, target.fileName)).catch(() => {});
+    }
+    const updated = items.filter((v) => v.id !== cleanId);
+    await writeSavedVideosIndex(updated);
+    return res.json({ ok: true });
+  } catch {
+    return res.status(500).json({ error: 'ভিডিও মুছে ফেলা যায়নি।' });
+  }
+});
+
+// Persistent Video Projects JSON API (Server backup alongside IndexedDB)
+app.get('/api/video-projects', async (_req, res) => {
+  try {
+    await ensureDataDirs();
+    const raw = await fs.readFile(SAVED_PROJECTS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    return res.json({ projects: Array.isArray(parsed) ? parsed : [] });
+  } catch {
+    return res.json({ projects: [] });
+  }
+});
+
+app.post('/api/video-projects', async (req, res) => {
+  try {
+    await ensureDataDirs();
+    const { projects } = req.body ?? {};
+    if (!Array.isArray(projects)) {
+      return res.status(400).json({ error: 'Invalid projects array' });
+    }
+    await fs.writeFile(SAVED_PROJECTS_FILE, JSON.stringify(projects.slice(0, 40), null, 2), 'utf8');
+    return res.json({ ok: true });
+  } catch {
+    return res.status(500).json({ error: 'Failed to save video projects' });
+  }
+});
+
+/* ============================================================================
+ * FACEBOOK PAGE & WEBHOOK PUBLISHING
+ * ========================================================================== */
 
 app.post('/api/facebook/verify', async (req, res) => {
   try {
     const { pageId, pageAccessToken } = req.body ?? {};
     if (!pageId || !pageAccessToken) {
-      return res.status(400).json({ error: 'Page ID এবং Page Access Token দুটোই দিতে হবে।' });
+      return res.status(400).json({ error: 'Page ID এবং Page Access Token দুটিই দিতে হবে।' });
     }
-
-    const url = new URL(
-      `https://graph.facebook.com/v21.0/${encodeURIComponent(String(pageId).trim())}`
-    );
-    url.searchParams.set('fields', 'id,name,fan_count,link');
-    url.searchParams.set('access_token', String(pageAccessToken).trim());
-
-    const fbRes = await fetch(url.toString());
+    const url = `https://graph.facebook.com/v21.0/${encodeURIComponent(String(pageId).trim())}?fields=id,name,fan_count,link&access_token=${encodeURIComponent(String(pageAccessToken).trim())}`;
+    const fbRes = await fetch(url);
     const data = await fbRes.json();
-
     if (!fbRes.ok || data.error) {
       return res.status(400).json({
-        error:
-          data?.error?.message ||
-          'Facebook Page যাচাই করা যায়নি। Token বা Page ID চেক করুন।',
+        error: data?.error?.message || 'Facebook Page যাচাই করা যায়নি।',
       });
     }
-
     return res.json({
       id: data.id,
       name: data.name,
@@ -1184,37 +1251,26 @@ app.post('/api/facebook/verify', async (req, res) => {
       link: data.link ?? null,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Facebook verification failed.';
-    return res.status(500).json({ error: message });
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Facebook verification failed.',
+    });
   }
 });
 
 app.post('/api/facebook/publish', async (req, res) => {
   try {
-    const {
-      pageId,
-      pageAccessToken,
-      caption,
-      imageDataUrl,
-      scheduledPublishTime,
-    } = req.body ?? {};
-
+    const { pageId, pageAccessToken, caption, imageDataUrl, scheduledPublishTime } =
+      req.body ?? {};
     if (!pageId || !pageAccessToken || !imageDataUrl) {
       return res.status(400).json({
         error: 'পোস্ট করার জন্য Page ID, Page Access Token এবং ছবি প্রয়োজন।',
       });
     }
-
     const match = String(imageDataUrl).match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
-    if (!match) {
-      return res.status(400).json({ error: 'Invalid image data format.' });
-    }
+    if (!match) return res.status(400).json({ error: 'Invalid image data format.' });
 
-    const mimeType = match[1];
-    const base64Data = match[2];
-    const buffer = Buffer.from(base64Data, 'base64');
-    const blob = new Blob([buffer], { type: mimeType });
-
+    const buffer = Buffer.from(match[2], 'base64');
+    const blob = new Blob([buffer], { type: match[1] });
     const form = new FormData();
     form.append('source', blob, `rafu-folk-${Date.now()}.png`);
     form.append('caption', String(caption || ''));
@@ -1227,85 +1283,52 @@ app.post('/api/facebook/publish', async (req, res) => {
           error: 'Facebook শিডিউল সময় অবশ্যই বর্তমান সময়ের অন্তত ১০ মিনিট পরের হতে হবে।',
         });
       }
-      if (unixSec > nowSec + 30 * 24 * 60 * 60) {
-        return res.status(400).json({
-          error: 'Facebook সর্বোচ্চ ৩০ দিনের মধ্যে পোস্ট শিডিউল করতে দেয়।',
-        });
-      }
       form.append('published', 'false');
       form.append('scheduled_publish_time', String(unixSec));
     } else {
       form.append('published', 'true');
     }
-
     form.append('access_token', String(pageAccessToken).trim());
 
     const fbRes = await fetch(
       `https://graph.facebook.com/v21.0/${encodeURIComponent(String(pageId).trim())}/photos`,
-      {
-        method: 'POST',
-        body: form,
-      }
+      { method: 'POST', body: form }
     );
     const data = await fbRes.json();
-
     if (!fbRes.ok || data.error) {
       return res.status(400).json({
         error: data?.error?.message || 'Facebook Page-এ পোস্ট করা যায়নি।',
       });
     }
-
     return res.json({
       id: data.id,
       postId: data.post_id || data.id,
       scheduled: Boolean(scheduledPublishTime),
     });
   } catch (err) {
-    const message =
-      err instanceof Error ? err.message : 'Failed to publish to Facebook Page.';
-    return res.status(500).json({ error: message });
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Failed to publish to Facebook Page.',
+    });
   }
 });
 
 app.post('/api/facebook/publish-video', uploadVideo.single('video'), async (req, res) => {
   try {
-    const { pageId, pageAccessToken, title, description, scheduledPublishTime } =
-      req.body ?? {};
+    const { pageId, pageAccessToken, title, description, scheduledPublishTime } = req.body ?? {};
     const file = req.file;
-
     if (!pageId || !pageAccessToken || !file) {
       return res.status(400).json({
         error: 'ভিডিও পোস্ট করার জন্য Page ID, Page Access Token এবং ভিডিও ফাইল প্রয়োজন।',
       });
     }
 
-    const cleanPageId = String(pageId).trim();
-    if (!/^[a-zA-Z0-9._-]+$/.test(cleanPageId)) {
-      return res.status(400).json({ error: 'সঠিক Facebook Page ID দিন।' });
-    }
-
-    const detected = detectVideoFormat(file);
-    if (!detected) {
-      return res.status(400).json({
-        error: 'কেবল MP4 বা WebM ভিডিও আপলোড করা যাবে।',
-      });
-    }
-
-    // Always normalize/transcode to Facebook-compliant H.264 + AAC MP4 via FFmpeg
+    const detected = detectVideoFormat(file) || 'mp4';
     let uploadBuffer = file.buffer;
-    try {
+    if (detected !== 'mp4') {
       uploadBuffer = await transcodeBufferToFacebookMp4(file.buffer, detected);
-    } catch (transcodeErr) {
-      console.warn('FFmpeg transcode warning, falling back if MP4:', transcodeErr);
-      if (detected !== 'mp4') {
-        return res.status(500).json({
-          error: 'ভিডিও MP4 ফরম্যাটে কনভার্ট করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।',
-        });
-      }
     }
 
     const blob = new Blob([new Uint8Array(uploadBuffer)], { type: 'video/mp4' });
-
     const form = new FormData();
     form.append('source', blob, `rafu-folk-${Date.now()}.mp4`);
     form.append('title', String(title || '@@RAFU FOLK@@ Cartoon').slice(0, 255));
@@ -1323,76 +1346,58 @@ app.post('/api/facebook/publish-video', uploadVideo.single('video'), async (req,
           error: 'Facebook শিডিউল সময় অবশ্যই বর্তমান সময়ের অন্তত ১০ মিনিট পরের হতে হবে।',
         });
       }
-      if (unixSec > nowSec + 30 * 24 * 60 * 60) {
-        return res.status(400).json({
-          error: 'Facebook সর্বোচ্চ ৩০ দিনের মধ্যে পোস্ট শিডিউল করতে দেয়।',
-        });
-      }
       form.append('published', 'false');
       form.append('scheduled_publish_time', String(unixSec));
     } else {
       form.append('published', 'true');
     }
-
     form.append('access_token', String(pageAccessToken).trim());
 
     const fbRes = await fetch(
-      `https://graph-video.facebook.com/v21.0/${encodeURIComponent(cleanPageId)}/videos`,
-      {
-        method: 'POST',
-        body: form,
-      }
+      `https://graph-video.facebook.com/v21.0/${encodeURIComponent(String(pageId).trim())}/videos`,
+      { method: 'POST', body: form }
     );
     const data = await fbRes.json();
-
     if (!fbRes.ok || data.error) {
       return res.status(400).json({
         error: data?.error?.message || 'Facebook Page-এ ভিডিও পোস্ট করা যায়নি।',
       });
     }
-
     return res.json({
       id: data.id,
       postId: data.id,
       scheduled: Boolean(scheduledPublishTime),
     });
   } catch (err) {
-    const message =
-      err instanceof Error ? err.message : 'Failed to publish video to Facebook Page.';
-    return res.status(500).json({ error: message });
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Failed to publish video to Facebook Page.',
+    });
   }
 });
 
 app.post('/api/webhook/publish', async (req, res) => {
   try {
     const { webhookUrl, payload } = req.body ?? {};
-    if (!webhookUrl) {
-      return res.status(400).json({ error: 'Webhook URL দেওয়া হয়নি।' });
-    }
-
+    if (!webhookUrl) return res.status(400).json({ error: 'Webhook URL দেওয়া হয়নি।' });
     const hookRes = await fetch(String(webhookUrl).trim(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload ?? {}),
     });
-
     if (!hookRes.ok) {
-      const text = await hookRes.text().catch(() => '');
-      return res.status(400).json({
-        error: `Webhook HTTP ${hookRes.status}: ${text.slice(0, 140) || 'Failed'}`,
-      });
+      return res.status(400).json({ error: `Webhook HTTP ${hookRes.status}` });
     }
-
     return res.json({ ok: true, status: hookRes.status });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Webhook publish failed.';
-    return res.status(500).json({ error: message });
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Webhook publish failed.',
+    });
   }
 });
 
 async function startServer() {
+  await ensureDataDirs();
   const PORT = Number(process.env.PORT) || 3000;
-
   if (process.env.NODE_ENV === 'production') {
     const distPath = path.resolve(__dirname, 'dist');
     app.use(express.static(distPath));
@@ -1407,9 +1412,8 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   }
-
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`@@RAFU FOLK@@ Cartoon & Reels Studio listening on http://localhost:${PORT}`);
+    console.log(`@@RAFU FOLK@@ Stick-Meme & Cartoon Studio listening on http://localhost:${PORT}`);
   });
 }
 
