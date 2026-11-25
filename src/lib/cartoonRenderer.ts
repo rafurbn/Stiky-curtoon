@@ -1117,3 +1117,20 @@ export function renderComicToCanvas(
 
   drawRafuFolkLogoOnCanvas(ctx, width, height, branding);
 }
+
+export async function renderOffscreenPng(
+  script: ComicScript,
+  branding: BrandingConfig
+): Promise<string> {
+  if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+    try {
+      await document.fonts.ready;
+    } catch {
+      // Ignore font wait failure
+    }
+  }
+  const canvas = document.createElement('canvas');
+  renderComicToCanvas(canvas, script, branding);
+  return canvas.toDataURL('image/png');
+}
+

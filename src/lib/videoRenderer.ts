@@ -7,8 +7,47 @@ import type {
   VideoScene,
   VideoScript,
   VideoTheme,
+  VideoVoiceClip,
 } from '../types/comic';
 import { startVideoAudioSession } from './videoAudioEngine';
+
+const THEME_IMAGE_URLS: Record<VideoTheme, string> = {
+  rain_storm: '/src/assets/images/bg_rain_storm_1795593943423.jpg',
+  desert_sun: '/src/assets/images/bg_desert_sun_1795593944376.jpg',
+  office_drama: '/src/assets/images/bg_office_drama_1795593941381.jpg',
+  tea_stall: '/src/assets/images/bg_tea_stall_1795593941870.jpg',
+  street_night: '/src/assets/images/bg_street_night_1795593944503.jpg',
+};
+
+const bgImageCache = new Map<VideoTheme, HTMLImageElement>();
+
+export function preloadThemeBackgrounds(): Promise<void> {
+  const entries = Object.entries(THEME_IMAGE_URLS) as Array<[VideoTheme, string]>;
+  return Promise.all(
+    entries.map(
+      ([theme, src]) =>
+        new Promise<void>((resolve) => {
+          const existing = bgImageCache.get(theme);
+          if (existing && existing.complete && existing.naturalWidth > 0) {
+            resolve();
+            return;
+          }
+          const img = new Image();
+          img.onload = () => {
+            bgImageCache.set(theme, img);
+            resolve();
+          };
+          img.onerror = () => resolve();
+          img.src = src;
+        })
+    )
+  ).then(() => undefined);
+}
+
+// Kick off background preloading immediately in browser
+if (typeof window !== 'undefined') {
+  preloadThemeBackgrounds().catch(() => {});
+}
 
 export function getVideoDimensions(aspectRatio: VideoAspectRatio): {
   width: number;
@@ -25,11 +64,46 @@ function easeInOutCubic(x: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-function easeOutBack(x: number): number {
-  const t = Math.max(0, Math.min(1, x));
-  const c1 = 1.70158;
-  const c3 = c1 + 1;
-  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+}
+
+function drawFallbackGradient(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  theme: VideoTheme,
+  groundY: number
+) {
+  const grad = ctx.createLinearGradient(0, 0, 0, groundY);
+  if (theme === 'rain_storm') {
+    grad.addColorStop(0, '#0F172A');
+    grad.addColorStop(1, '#334155');
+  } else if (theme === 'desert_sun') {
+    grad.addColorStop(0, '#EA580C');
+    grad.addColorStop(1, '#FDE047');
+  } else if (theme === 'office_drama') {
+    grad.addColorStop(0, '#E2E8F0');
+    grad.addColorStop(1, '#CBD5E1');
+  } else if (theme === 'tea_stall') {
+    grad.addColorStop(0, '#431407');
+    grad.addColorStop(1, '#D97706');
+  } else {
+    grad.addColorStop(0, '#090D16');
+    grad.addColorStop(1, '#1E1B4B');
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, groundY);
+  ctx.fillStyle = '#1E293B';
+  ctx.fillRect(0, groundY, w, h - groundY);
 }
 
 function drawThemeBackground(
@@ -41,351 +115,140 @@ function drawThemeBackground(
   localT: number,
   groundY: number
 ) {
-  if (theme === 'rain_storm') {
-    const sky = ctx.createLinearGradient(0, 0, 0, groundY);
-    sky.addColorStop(0, '#0F172A');
-    sky.addColorStop(0.55, '#1E293B');
-    sky.addColorStop(1, '#334155');
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, w, groundY);
+  const img = bgImageCache.get(theme);
+  if (img && img.complete && img.naturalWidth > 0) {
+    // Cover-crop onto canvas
+    const imgRatio = img.naturalWidth / img.naturalHeight;
+    const canvasRatio = w / h;
+    let drawW = w;
+    let drawH = h;
+    let offsetX = 0;
+    let offsetY = 0;
 
-    // Periodic lightning flash
-    const flashPhase = localT % 2.1;
-    const isFlash = flashPhase > 0.45 && flashPhase < 0.62;
-    if (isFlash) {
-      ctx.fillStyle = 'rgba(226, 232, 240, 0.25)';
-      ctx.fillRect(0, 0, w, groundY);
-      ctx.save();
-      ctx.strokeStyle = '#F8FAFC';
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(w * 0.26, 40);
-      ctx.lineTo(w * 0.21, 170);
-      ctx.lineTo(w * 0.29, 200);
-      ctx.lineTo(w * 0.22, 360);
-      ctx.stroke();
-      ctx.restore();
+    if (imgRatio > canvasRatio) {
+      drawH = h;
+      drawW = h * imgRatio;
+      offsetX = (w - drawW) / 2;
+    } else {
+      drawW = w;
+      drawH = w / imgRatio;
+      offsetY = (h - drawH) / 2;
     }
 
-    // Drifting storm clouds
-    ctx.fillStyle = '#0F172A';
-    for (let i = 0; i < 4; i++) {
-      const cx = ((i * 230 + globalT * 18) % (w + 260)) - 130;
-      const cy = 90 + (i % 2) * 42;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 65, 0, Math.PI * 2);
-      ctx.arc(cx + 55, cy - 12, 74, 0, Math.PI * 2);
-      ctx.arc(cx + 115, cy + 5, 58, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Distant silhouette & road
-    ctx.fillStyle = '#1E293B';
-    ctx.fillRect(0, groundY - 90, w, 90);
-    ctx.fillStyle = '#334155';
-    ctx.fillRect(0, groundY, w, h - groundY);
-    ctx.fillStyle = '#475569';
-    ctx.fillRect(0, groundY, w, 14);
-
-    // Animated rain streaks
+    // Subtle Ken Burns ambient drift so background feels alive
+    const kenScale = 1.03 + Math.sin(globalT * 0.5) * 0.025;
     ctx.save();
-    ctx.strokeStyle = 'rgba(186, 230, 253, 0.55)';
+    ctx.translate(w / 2, h / 2);
+    ctx.scale(kenScale, kenScale);
+    ctx.translate(-w / 2, -h / 2);
+    ctx.drawImage(img, offsetX, offsetY, drawW, drawH);
+    ctx.restore();
+
+    // Subtle ground stage vignette so characters stand out clearly
+    const stageGrad = ctx.createLinearGradient(0, groundY - 220, 0, h);
+    stageGrad.addColorStop(0, 'rgba(15, 23, 42, 0)');
+    stageGrad.addColorStop(0.55, 'rgba(15, 23, 42, 0.26)');
+    stageGrad.addColorStop(1, 'rgba(15, 23, 42, 0.72)');
+    ctx.fillStyle = stageGrad;
+    ctx.fillRect(0, groundY - 220, w, h - (groundY - 220));
+  } else {
+    drawFallbackGradient(ctx, w, h, theme, groundY);
+  }
+
+  // Animated atmospheric FX overlays
+  if (theme === 'rain_storm') {
+    const flashPhase = localT % 2.1;
+    if (flashPhase > 0.45 && flashPhase < 0.6) {
+      ctx.fillStyle = 'rgba(241, 245, 249, 0.25)';
+      ctx.fillRect(0, 0, w, h);
+    }
+    ctx.save();
+    ctx.strokeStyle = 'rgba(186, 230, 253, 0.58)';
     ctx.lineWidth = 2.2;
-    for (let i = 0; i < 65; i++) {
-      const rx = ((i * 73 + globalT * 110) % (w + 80)) - 40;
-      const ry = ((i * 137 + globalT * 820) % (groundY + 60)) - 40;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 42; i++) {
+      const rx = ((i * 89 + Math.floor(globalT * 260)) % (w + 100)) - 50;
+      const ry = ((i * 137 + globalT * 960) % (groundY + 120)) - 60;
       ctx.beginPath();
       ctx.moveTo(rx, ry);
-      ctx.lineTo(rx - 10, ry + 34);
-      ctx.stroke();
-    }
-
-    // Puddle splash rings on ground
-    ctx.strokeStyle = 'rgba(186, 230, 253, 0.45)';
-    ctx.lineWidth = 2;
-    for (let i = 0; i < 6; i++) {
-      const p = ((globalT * 1.8 + i * 0.37) % 1);
-      const px = w * (0.12 + i * 0.16);
-      const py = groundY + 34 + (i % 2) * 26;
-      ctx.beginPath();
-      ctx.ellipse(px, py, 8 + p * 26, 3 + p * 7, 0, 0, Math.PI * 2);
+      ctx.lineTo(rx - 12, ry + 34);
       ctx.stroke();
     }
     ctx.restore();
-    return;
+  } else if (theme === 'desert_sun') {
+    const heatAlpha = 0.07 + Math.sin(globalT * 5) * 0.03;
+    ctx.fillStyle = `rgba(251, 146, 60, ${heatAlpha})`;
+    ctx.fillRect(0, 0, w, h);
+  } else if (theme === 'street_night') {
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.16)';
+    ctx.fillRect(0, 0, w, h);
   }
-
-  if (theme === 'desert_sun') {
-    const sky = ctx.createLinearGradient(0, 0, 0, groundY);
-    sky.addColorStop(0, '#EA580C');
-    sky.addColorStop(0.48, '#F97316');
-    sky.addColorStop(1, '#FDE047');
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, w, groundY);
-
-    // Blazing pulsing sun
-    const sunX = w * 0.22;
-    const sunY = h * 0.17;
-    const pulse = Math.sin(globalT * 4) * 8;
-    ctx.fillStyle = 'rgba(254, 240, 138, 0.25)';
-    ctx.beginPath();
-    ctx.arc(sunX, sunY, 108 + pulse, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#FEF9C3';
-    ctx.beginPath();
-    ctx.arc(sunX, sunY, 66, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Distant desert dunes
-    ctx.fillStyle = '#D97706';
-    ctx.beginPath();
-    ctx.moveTo(0, groundY);
-    ctx.quadraticCurveTo(w * 0.28, groundY - 90, w * 0.56, groundY - 25);
-    ctx.quadraticCurveTo(w * 0.82, groundY - 75, w, groundY - 15);
-    ctx.lineTo(w, groundY);
-    ctx.closePath();
-    ctx.fill();
-
-    // Cacti silhouettes
-    const drawCactus = (cx: number, cy: number, scale: number) => {
-      ctx.save();
-      ctx.fillStyle = '#B45309';
-      ctx.beginPath();
-      ctx.roundRect(cx - 8 * scale, cy - 72 * scale, 16 * scale, 72 * scale, 8 * scale);
-      ctx.roundRect(cx - 28 * scale, cy - 52 * scale, 22 * scale, 11 * scale, 5 * scale);
-      ctx.roundRect(cx - 28 * scale, cy - 66 * scale, 11 * scale, 24 * scale, 5 * scale);
-      ctx.roundRect(cx + 6 * scale, cy - 42 * scale, 20 * scale, 11 * scale, 5 * scale);
-      ctx.roundRect(cx + 15 * scale, cy - 58 * scale, 11 * scale, 26 * scale, 5 * scale);
-      ctx.fill();
-      ctx.restore();
-    };
-    drawCactus(w * 0.14, groundY - 10, 0.85);
-    drawCactus(w * 0.86, groundY - 14, 1.05);
-
-    // Cracked dry desert ground
-    ctx.fillStyle = '#F59E0B';
-    ctx.fillRect(0, groundY, w, h - groundY);
-    ctx.strokeStyle = '#92400E';
-    ctx.lineWidth = 2.4;
-    for (let i = 0; i < 7; i++) {
-      const sx = w * (0.08 + i * 0.14);
-      ctx.beginPath();
-      ctx.moveTo(sx, groundY + 12);
-      ctx.lineTo(sx - 20, groundY + 55);
-      ctx.lineTo(sx + 18, groundY + 98);
-      ctx.stroke();
-    }
-
-    // Heat shimmer lines
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-    ctx.lineWidth = 2;
-    for (let i = 0; i < 4; i++) {
-      const y = groundY - 30 - i * 48;
-      const offset = Math.sin(globalT * 5 + i) * 14;
-      ctx.beginPath();
-      ctx.moveTo(w * 0.15 + offset, y);
-      ctx.quadraticCurveTo(w * 0.5, y - 10, w * 0.85 - offset, y);
-      ctx.stroke();
-    }
-    return;
-  }
-
-  if (theme === 'office_drama') {
-    ctx.fillStyle = '#EEF2FF';
-    ctx.fillRect(0, 0, w, groundY);
-
-    // Big office window
-    ctx.fillStyle = '#BAE6FD';
-    ctx.strokeStyle = '#334155';
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.roundRect(w * 0.12, h * 0.14, w * 0.76, h * 0.24, 12);
-    ctx.fill();
-    ctx.stroke();
-
-    // Window pane divider
-    ctx.beginPath();
-    ctx.moveTo(w * 0.5, h * 0.14);
-    ctx.lineTo(w * 0.5, h * 0.38);
-    ctx.stroke();
-
-    // Wall clock
-    const clockX = w * 0.8;
-    const clockY = h * 0.09;
-    ctx.fillStyle = '#FFFFFF';
-    ctx.beginPath();
-    ctx.arc(clockX, clockY, 34, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(clockX, clockY);
-    ctx.lineTo(clockX + Math.cos(globalT * 2) * 20, clockY + Math.sin(globalT * 2) * 20);
-    ctx.stroke();
-
-    // Floor
-    ctx.fillStyle = '#CBD5E1';
-    ctx.fillRect(0, groundY, w, h - groundY);
-    ctx.fillStyle = '#94A3B8';
-    ctx.fillRect(0, groundY, w, 10);
-    return;
-  }
-
-  if (theme === 'tea_stall') {
-    const sky = ctx.createLinearGradient(0, 0, 0, groundY);
-    sky.addColorStop(0, '#312E81');
-    sky.addColorStop(0.6, '#7C2D12');
-    sky.addColorStop(1, '#F59E0B');
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, w, groundY);
-
-    // Striped tea stall awning at top
-    const stripeCount = 8;
-    const sw = w / stripeCount;
-    for (let i = 0; i < stripeCount; i++) {
-      ctx.fillStyle = i % 2 === 0 ? '#DC2626' : '#FEF3C7';
-      ctx.fillRect(i * sw, 0, sw + 1, h * 0.085);
-      ctx.beginPath();
-      ctx.arc(i * sw + sw / 2, h * 0.085, sw / 2, 0, Math.PI);
-      ctx.fill();
-    }
-
-    // Swinging warm bulb
-    const sway = Math.sin(globalT * 2.4) * 8;
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(w * 0.5, h * 0.085);
-    ctx.lineTo(w * 0.5 + sway, h * 0.16);
-    ctx.stroke();
-    ctx.fillStyle = 'rgba(253, 224, 71, 0.25)';
-    ctx.beginPath();
-    ctx.arc(w * 0.5 + sway, h * 0.17, 74, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#FEF08A';
-    ctx.beginPath();
-    ctx.arc(w * 0.5 + sway, h * 0.17, 15, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Wooden tea bench at back
-    ctx.fillStyle = '#78350F';
-    ctx.fillRect(w * 0.12, groundY - 46, w * 0.76, 14);
-    ctx.fillRect(w * 0.18, groundY - 32, 12, 32);
-    ctx.fillRect(w * 0.8, groundY - 32, 12, 32);
-
-    // Ground
-    ctx.fillStyle = '#451A03';
-    ctx.fillRect(0, groundY, w, h - groundY);
-    return;
-  }
-
-  // street_night
-  const sky = ctx.createLinearGradient(0, 0, 0, groundY);
-  sky.addColorStop(0, '#020617');
-  sky.addColorStop(1, '#1E1B4B');
-  ctx.fillStyle = sky;
-  ctx.fillRect(0, 0, w, groundY);
-
-  // Moon & stars
-  ctx.fillStyle = '#FEF9C3';
-  ctx.beginPath();
-  ctx.arc(w * 0.8, h * 0.14, 40, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#020617';
-  ctx.beginPath();
-  ctx.arc(w * 0.8 + 14, h * 0.14 - 8, 36, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = '#E2E8F0';
-  for (let i = 0; i < 18; i++) {
-    const sx = (i * 97 + 41) % w;
-    const sy = (i * 59 + 30) % (groundY * 0.55);
-    const alpha = 0.4 + 0.5 * Math.sin(globalT * 3 + i);
-    ctx.globalAlpha = Math.max(0.2, alpha);
-    ctx.fillRect(sx, sy, 3, 3);
-  }
-  ctx.globalAlpha = 1;
-
-  // Glowing streetlamp
-  ctx.fillStyle = '#334155';
-  ctx.fillRect(w * 0.48, h * 0.18, 12, groundY - h * 0.18);
-  ctx.fillStyle = 'rgba(253, 224, 71, 0.16)';
-  ctx.beginPath();
-  ctx.moveTo(w * 0.48 + 6, h * 0.18);
-  ctx.lineTo(w * 0.18, groundY);
-  ctx.lineTo(w * 0.82, groundY);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = '#1E293B';
-  ctx.fillRect(0, groundY, w, h - groundY);
 }
 
-function drawCharacterTrait(
-  ctx: CanvasRenderingContext2D,
-  id: CharacterId,
-  hx: number,
-  hy: number,
-  r: number
-) {
-  ctx.save();
-  ctx.strokeStyle = '#0F172A';
-  ctx.fillStyle = '#0F172A';
-  if (id === 'rafu') {
-    // Spiky hair
-    ctx.lineWidth = 4.5;
-    ctx.beginPath();
-    ctx.moveTo(hx - r * 0.45, hy - r * 0.86);
-    ctx.lineTo(hx - r * 0.28, hy - r * 1.24);
-    ctx.lineTo(hx - r * 0.04, hy - r * 0.96);
-    ctx.lineTo(hx + r * 0.14, hy - r * 1.32);
-    ctx.lineTo(hx + r * 0.34, hy - r * 0.92);
-    ctx.stroke();
-  } else if (id === 'folk') {
-    // Cool round glasses
-    ctx.lineWidth = 3.5;
-    ctx.beginPath();
-    ctx.arc(hx - r * 0.26, hy - r * 0.12, r * 0.24, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(hx + r * 0.26, hy - r * 0.12, r * 0.24, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(hx - r * 0.02, hy - r * 0.12);
-    ctx.lineTo(hx + r * 0.02, hy - r * 0.12);
-    ctx.stroke();
-  } else if (id === 'chacha') {
-    // White topi
-    ctx.fillStyle = '#F8FAFC';
-    ctx.lineWidth = 3.5;
-    ctx.beginPath();
-    ctx.arc(hx, hy - r * 0.78, r * 0.68, Math.PI, 0);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  } else if (id === 'friend') {
-    // Baseball cap
-    ctx.fillStyle = '#2563EB';
-    ctx.lineWidth = 3.5;
-    ctx.beginPath();
-    ctx.arc(hx, hy - r * 0.72, r * 0.78, Math.PI, 0);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(hx + r * 0.4, hy - r * 0.72);
-    ctx.lineTo(hx + r * 1.1, hy - r * 0.65);
-    ctx.stroke();
-  }
-  ctx.restore();
+interface CharacterAppearance {
+  skin: string;
+  shirt: string;
+  shirtShade: string;
+  pants: string;
+  shoe: string;
+  badgeColor: string;
 }
 
-function drawAnimatedProp(
+function getCharacterAppearance(id: CharacterId): CharacterAppearance {
+  switch (id) {
+    case 'rafu':
+      return {
+        skin: '#FCD5B5',
+        shirt: '#FACC15',
+        shirtShade: '#EAB308',
+        pants: '#1E293B',
+        shoe: '#DC2626',
+        badgeColor: '#FACC15',
+      };
+    case 'folk':
+      return {
+        skin: '#F8CAA5',
+        shirt: '#0EA5E9',
+        shirtShade: '#0284C7',
+        pants: '#334155',
+        shoe: '#0F172A',
+        badgeColor: '#38BDF8',
+      };
+    case 'boss':
+      return {
+        skin: '#F5C6A5',
+        shirt: '#1E293B',
+        shirtShade: '#0F172A',
+        pants: '#0F172A',
+        shoe: '#020617',
+        badgeColor: '#F87171',
+      };
+    case 'chacha':
+      return {
+        skin: '#E6B18A',
+        shirt: '#F8FAFC',
+        shirtShade: '#CBD5E1',
+        pants: '#0F766E',
+        shoe: '#78350F',
+        badgeColor: '#34D399',
+      };
+    case 'friend':
+      return {
+        skin: '#FCD5B5',
+        shirt: '#EC4899',
+        shirtShade: '#DB2777',
+        pants: '#1D4ED8',
+        shoe: '#F8FAFC',
+        badgeColor: '#F472B6',
+      };
+  }
+}
+
+function drawProp(
   ctx: CanvasRenderingContext2D,
   prop: VideoProp,
-  handX: number,
-  handY: number,
   hx: number,
   hy: number,
-  facing: 1 | -1,
   t: number
 ) {
   if (prop === 'none') return;
@@ -394,579 +257,653 @@ function drawAnimatedProp(
   ctx.lineJoin = 'round';
 
   if (prop === 'umbrella_normal') {
-    const ux = handX;
-    const uy = hy - 98;
+    ctx.strokeStyle = '#1E293B';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx, hy - 145);
+    ctx.stroke();
+
+    ctx.fillStyle = '#EF4444';
     ctx.strokeStyle = '#0F172A';
     ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.moveTo(handX, handY);
-    ctx.lineTo(ux, uy);
-    ctx.stroke();
-
-    ctx.fillStyle = '#1E293B';
-    ctx.beginPath();
-    ctx.arc(ux, uy + 8, 92, Math.PI, 0);
+    ctx.arc(hx, hy - 140, 86, Math.PI, 0);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
   } else if (prop === 'umbrella_upside_down') {
-    // Upside-down umbrella filled with sloshing blue water!
-    const ux = handX;
-    const uy = handY - 12;
+    ctx.strokeStyle = '#1E293B';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx, hy - 108);
+    ctx.stroke();
+
+    ctx.fillStyle = '#0284C7';
     ctx.strokeStyle = '#0F172A';
     ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.moveTo(handX, handY + 28);
-    ctx.lineTo(ux, uy - 78);
-    ctx.stroke();
-    // J-handle at top
-    ctx.beginPath();
-    ctx.arc(ux + 12, uy - 78, 12, Math.PI, 0);
-    ctx.stroke();
-
-    // Bowl canopy
-    ctx.fillStyle = '#1E293B';
-    ctx.beginPath();
-    ctx.arc(ux, uy - 24, 82, 0, Math.PI);
+    ctx.arc(hx, hy - 110, 78, 0, Math.PI);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
 
-    // Sloshing blue water inside
-    const ripple = Math.sin(t * 7) * 4;
-    ctx.fillStyle = '#38BDF8';
+    ctx.fillStyle = '#7DD3FC';
     ctx.beginPath();
-    ctx.ellipse(ux, uy - 22 + ripple * 0.3, 72, 16, 0, 0, Math.PI * 2);
+    ctx.ellipse(hx, hy - 108, 66, 11, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#BAE6FD';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.ellipse(ux, uy - 22 + ripple * 0.3, 34 + ripple, 7, 0, 0, Math.PI * 2);
-    ctx.stroke();
   } else if (prop === 'broken_umbrella') {
-    ctx.strokeStyle = '#0F172A';
+    ctx.strokeStyle = '#1E293B';
     ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.moveTo(handX, handY);
-    ctx.lineTo(handX + facing * 34, handY + 58);
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx - 14, hy - 125);
     ctx.stroke();
-    ctx.fillStyle = '#334155';
+
+    ctx.strokeStyle = '#64748B';
+    ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.moveTo(handX + facing * 18, handY + 46);
-    ctx.lineTo(handX + facing * 66, handY + 72);
-    ctx.lineTo(handX + facing * 8, handY + 84);
-    ctx.closePath();
-    ctx.fill();
+    ctx.moveTo(hx - 54, hy - 96);
+    ctx.lineTo(hx - 14, hy - 128);
+    ctx.lineTo(hx + 34, hy - 98);
     ctx.stroke();
   } else if (prop === 'water_tap_glass') {
-    // Upside-down umbrella overhead + golden tap pouring water into a glass!
-    const ux = handX;
-    const uy = hy - 68;
-    ctx.fillStyle = '#1E293B';
+    ctx.fillStyle = '#E0F2FE';
     ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4.5;
+    ctx.lineWidth = 4;
     ctx.beginPath();
-    ctx.arc(ux, uy - 20, 74, 0, Math.PI);
+    ctx.moveTo(hx - 20, hy - 34);
+    ctx.lineTo(hx + 20, hy - 34);
+    ctx.lineTo(hx + 15, hy + 18);
+    ctx.lineTo(hx - 15, hy + 18);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+
     ctx.fillStyle = '#38BDF8';
-    ctx.beginPath();
-    ctx.ellipse(ux, uy - 18, 64, 13, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Golden tap
-    const tapX = ux - 14;
-    const tapY = uy + 56;
-    ctx.fillStyle = '#FACC15';
-    ctx.fillRect(tapX, tapY, 26, 11);
-    ctx.strokeRect(tapX, tapY, 26, 11);
-    ctx.fillRect(tapX + 18, tapY + 8, 9, 14);
-
-    // Animated pouring water stream
-    const streamW = 5 + Math.sin(t * 22) * 1.6;
-    ctx.fillStyle = '#38BDF8';
-    ctx.fillRect(tapX + 20, tapY + 22, streamW, 66);
-
-    // Glass held in hand
-    ctx.fillStyle = 'rgba(186, 230, 253, 0.85)';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.roundRect(handX - 18, handY - 12, 36, 44, 4);
-    ctx.fill();
-    ctx.stroke();
+    ctx.fillRect(hx - 14, hy - 12, 28, 26);
   } else if (prop === 'tea_cup') {
     ctx.fillStyle = '#FFFFFF';
     ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3.5;
+    ctx.lineWidth = 4;
+    ctx.fillRect(hx - 18, hy - 14, 34, 28);
+    ctx.strokeRect(hx - 18, hy - 14, 34, 28);
+
     ctx.beginPath();
-    ctx.roundRect(handX - 14, handY - 16, 28, 26, 5);
-    ctx.fill();
+    ctx.arc(hx + 18, hy, 8, -Math.PI / 2, Math.PI / 2);
     ctx.stroke();
-    // Rising steam
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-    ctx.lineWidth = 2.5;
-    for (let i = 0; i < 2; i++) {
-      const sx = handX - 5 + i * 10;
-      const wave = Math.sin(t * 6 + i) * 5;
-      ctx.beginPath();
-      ctx.moveTo(sx, handY - 22);
-      ctx.quadraticCurveTo(sx + wave, handY - 38, sx - wave, handY - 54);
-      ctx.stroke();
-    }
-  } else if (prop === 'smartphone') {
-    const vib = Math.sin(t * 36) * 2.5;
-    ctx.fillStyle = '#1E293B';
-    ctx.strokeStyle = '#0F172A';
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
     ctx.lineWidth = 3;
+    const steamY = (t * 28) % 16;
     ctx.beginPath();
-    ctx.roundRect(handX - 11 + vib, handY - 24, 22, 38, 4);
+    ctx.moveTo(hx - 6, hy - 22 - steamY);
+    ctx.quadraticCurveTo(hx + 4, hy - 34 - steamY, hx - 4, hy - 44 - steamY);
+    ctx.stroke();
+  } else if (prop === 'smartphone') {
+    ctx.fillStyle = '#0F172A';
+    ctx.strokeStyle = '#38BDF8';
+    ctx.lineWidth = 3;
+    drawRoundedRect(ctx, hx - 14, hy - 26, 28, 46, 5);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = '#38BDF8';
-    ctx.fillRect(handX - 8 + vib, handY - 20, 16, 28);
+    ctx.fillStyle = '#7DD3FC';
+    ctx.fillRect(hx - 10, hy - 20, 20, 32);
   } else if (prop === 'money') {
-    const flutter = Math.sin(t * 8) * 5;
     ctx.fillStyle = '#22C55E';
     ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.roundRect(handX - 20, handY - 14 + flutter, 42, 22, 3);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#DCFCE7';
-    ctx.font = '700 14px "JetBrains Mono", monospace';
-    ctx.fillText('৳৳', handX - 8, handY + 2 + flutter);
+    ctx.lineWidth = 3.5;
+    ctx.fillRect(hx - 24, hy - 14, 48, 28);
+    ctx.strokeRect(hx - 24, hy - 14, 48, 28);
+    ctx.fillStyle = '#0F172A';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('৳', hx, hy + 1);
   } else if (prop === 'laptop') {
-    ctx.fillStyle = '#475569';
+    ctx.fillStyle = '#334155';
     ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3;
-    ctx.fillRect(handX - 24, handY - 20, 48, 30);
-    ctx.strokeRect(handX - 24, handY - 20, 48, 30);
-    ctx.fillStyle = '#94A3B8';
-    ctx.fillRect(handX - 28, handY + 10, 56, 8);
+    ctx.lineWidth = 4;
+    ctx.fillRect(hx - 32, hy - 34, 64, 42);
+    ctx.strokeRect(hx - 32, hy - 34, 64, 42);
+    ctx.fillStyle = '#93C5FD';
+    ctx.fillRect(hx - 26, hy - 28, 52, 30);
+    ctx.fillStyle = '#64748B';
+    ctx.fillRect(hx - 40, hy + 8, 80, 9);
   } else if (prop === 'clock') {
     ctx.fillStyle = '#FFFFFF';
     ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3.5;
+    ctx.lineWidth = 4;
     ctx.beginPath();
-    ctx.arc(handX, handY - 12, 20, 0, Math.PI * 2);
+    ctx.arc(hx, hy - 18, 26, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(hx, hy - 18);
+    ctx.lineTo(hx, hy - 34);
+    ctx.moveTo(hx, hy - 18);
+    ctx.lineTo(hx + 12, hy - 18);
+    ctx.stroke();
   }
-
   ctx.restore();
 }
 
-function drawAnimatedCharacter(
+function drawLayeredCartoonCharacter(
   ctx: CanvasRenderingContext2D,
   char: VideoCharacterState,
   baseX: number,
   groundY: number,
   facing: 1 | -1,
-  t: number,
-  localT: number
+  globalT: number,
+  localT: number,
+  sceneDur: number,
+  isSpeaking: boolean
 ) {
   ctx.save();
-
-  // Compute animated body offsets from action
-  let walkOffsetX = 0;
-  let bobY = Math.sin(t * 4) * 3;
-  let bodyTilt = 0;
-  let leftArmAngle = -0.3;
-  let rightArmAngle = 0.5;
-  let legSpread = 22;
-  let legStep = 0;
-
-  if (char.action === 'walk_in') {
-    const prog = easeInOutCubic(Math.min(1, localT / 1.2));
-    walkOffsetX = (1 - prog) * facing * -180;
-    bobY = Math.abs(Math.sin(t * 11)) * -10;
-    legStep = Math.sin(t * 11) * 26;
-  } else if (char.action === 'run') {
-    bobY = Math.abs(Math.sin(t * 16)) * -18;
-    bodyTilt = facing * 0.18;
-    legStep = Math.sin(t * 16) * 36;
-    leftArmAngle = -0.8 + Math.sin(t * 16) * 0.7;
-    rightArmAngle = 0.8 - Math.sin(t * 16) * 0.7;
-  } else if (char.action === 'laugh' || char.action === 'point_laugh') {
-    bobY = Math.sin(t * 18) * 6;
-    bodyTilt = facing * -0.07;
-    rightArmAngle = char.action === 'point_laugh' ? -0.15 : 0.7;
-    leftArmAngle = -0.7;
-  } else if (char.action === 'panting') {
-    bobY = Math.sin(t * 9) * 5;
-    bodyTilt = facing * 0.15;
-    leftArmAngle = 1.1;
-    rightArmAngle = 1.2;
-  } else if (char.action === 'shocked_jump' || char.action === 'eye_pop') {
-    const jump = Math.max(0, Math.sin(Math.min(Math.PI, localT * 7))) * 26;
-    bobY = -jump;
-    leftArmAngle = -1.2;
-    rightArmAngle = -1.2;
-  } else if (char.action === 'hands_up') {
-    leftArmAngle = -1.35 + Math.sin(t * 8) * 0.1;
-    rightArmAngle = -1.35 - Math.sin(t * 8) * 0.1;
-  } else if (char.action === 'facepalm') {
-    rightArmAngle = -1.6;
-  } else if (char.action === 'pour_water' || char.action === 'sip_tea') {
-    rightArmAngle = -0.25 + Math.sin(t * 5) * 0.08;
-  }
-
-  const cx = baseX + walkOffsetX;
-  const hipY = groundY - 82 + bobY;
-  const shoulderY = hipY - 86;
-  const neckX = cx + bodyTilt * 40;
-  const hx = neckX;
-  const hy = shoulderY - 56;
-  const headR = 48;
-
-  // Ground shadow
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.24)';
-  ctx.beginPath();
-  ctx.ellipse(cx, groundY + 4, 38, 10, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Legs
-  ctx.strokeStyle = '#0F172A';
-  ctx.lineWidth = 9.5;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  ctx.beginPath();
-  ctx.moveTo(cx, hipY);
-  ctx.lineTo(cx - legSpread + legStep, groundY);
-  ctx.moveTo(cx, hipY);
-  ctx.lineTo(cx + legSpread - legStep, groundY);
-  ctx.stroke();
 
-  // Torso
-  ctx.beginPath();
-  ctx.moveTo(cx, hipY);
-  ctx.lineTo(neckX, shoulderY);
-  ctx.stroke();
+  const look = getCharacterAppearance(char.id);
 
-  // Boss red tie
-  if (char.id === 'boss') {
-    ctx.fillStyle = '#DC2626';
-    ctx.beginPath();
-    ctx.moveTo(neckX, shoulderY + 6);
-    ctx.lineTo(neckX - 9, shoulderY + 50);
-    ctx.lineTo(neckX, shoulderY + 62);
-    ctx.lineTo(neckX + 9, shoulderY + 50);
-    ctx.closePath();
-    ctx.fill();
+  let x = baseX;
+  let yOffset = 0;
+  let tilt = 0;
+  let breathe = Math.sin(globalT * 3.4 + baseX * 0.02) * 3;
+
+  if (char.action === 'walk_in') {
+    const p = easeInOutCubic(Math.min(1, localT / Math.min(1.4, sceneDur * 0.5)));
+    x = baseX + facing * -200 * (1 - p);
+    yOffset = -Math.abs(Math.sin(localT * 10)) * 12 * (1 - p);
+  } else if (char.action === 'run') {
+    const p = Math.min(1, localT / Math.max(0.8, sceneDur));
+    x = baseX - facing * p * 180;
+    yOffset = -Math.abs(Math.sin(localT * 18)) * 18;
+    tilt = -facing * 0.16;
+  } else if (char.action === 'shocked_jump') {
+    const jumpP = Math.sin(Math.min(1, localT * 2.4) * Math.PI);
+    yOffset = -jumpP * 68;
+  } else if (char.action === 'laugh' || char.action === 'point_laugh') {
+    yOffset = -Math.abs(Math.sin(globalT * 12)) * 9;
+    tilt = Math.sin(globalT * 10) * 0.04;
+  } else if (char.action === 'panting') {
+    breathe = Math.sin(globalT * 11) * 7;
+    tilt = facing * 0.09;
+  } else if (char.action === 'sip_tea') {
+    tilt = Math.sin(globalT * 2.5) * 0.03;
   }
 
-  // Arms
-  const armLen = 72;
-  const lx = neckX - Math.cos(leftArmAngle) * armLen * facing;
-  const ly = shoulderY + 12 + Math.sin(leftArmAngle) * armLen;
-  const rx = neckX + Math.cos(rightArmAngle) * armLen * facing;
-  const ry = shoulderY + 12 + Math.sin(rightArmAngle) * armLen;
+  const hipY = groundY - 124 + yOffset + breathe * 0.35;
+  const shoulderY = hipY - 96;
+  const headY = shoulderY - 56;
+  const headR = 46;
+
+  // Ground drop shadow
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+  ctx.beginPath();
+  ctx.ellipse(x, groundY + 4, 52, 13, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.translate(x, groundY);
+  ctx.rotate(tilt);
+  ctx.translate(-x, -groundY);
+
+  // Legs + shoes
+  const legStride =
+    char.action === 'run'
+      ? Math.sin(globalT * 22) * 32
+      : char.action === 'walk_in'
+        ? Math.sin(localT * 12) * 20
+        : 0;
 
   ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 14;
+  ctx.beginPath();
+  ctx.moveTo(x - 16, hipY);
+  ctx.lineTo(x - 24 - legStride, groundY - 8);
+  ctx.moveTo(x + 16, hipY);
+  ctx.lineTo(x + 24 + legStride, groundY - 8);
+  ctx.stroke();
+
+  ctx.strokeStyle = look.pants;
   ctx.lineWidth = 9;
   ctx.beginPath();
-  ctx.moveTo(neckX, shoulderY + 10);
-  ctx.lineTo(lx, ly);
-  ctx.moveTo(neckX, shoulderY + 10);
-  if (char.action === 'facepalm') {
-    ctx.lineTo(hx + facing * 14, hy + 8);
-  } else {
-    ctx.lineTo(rx, ry);
-  }
+  ctx.moveTo(x - 16, hipY);
+  ctx.lineTo(x - 24 - legStride, groundY - 8);
+  ctx.moveTo(x + 16, hipY);
+  ctx.lineTo(x + 24 + legStride, groundY - 8);
   ctx.stroke();
 
-  // Draw character prop at active hand
-  drawAnimatedProp(ctx, char.prop, rx, ry, hx, hy, facing, t);
-
-  // Expressive circular white head
-  ctx.fillStyle = '#FFFFFF';
+  // Shoes
+  ctx.fillStyle = look.shoe;
   ctx.strokeStyle = '#0F172A';
-  ctx.lineWidth = 5.5;
+  ctx.lineWidth = 3.5;
+  [-1, 1].forEach((dir, idx) => {
+    const sx = x + dir * 24 + (idx === 0 ? -legStride : legStride);
+    ctx.beginPath();
+    ctx.ellipse(sx + facing * 6, groundY - 4, 17, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  });
+
+  // Layered Torso / Outfit
+  ctx.fillStyle = look.shirt;
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 5;
   ctx.beginPath();
-  ctx.arc(hx, hy, headR, 0, Math.PI * 2);
+  ctx.moveTo(x - 32, shoulderY + 6);
+  ctx.quadraticCurveTo(x, shoulderY - 8, x + 32, shoulderY + 6);
+  ctx.lineTo(x + 38, hipY + 8);
+  ctx.quadraticCurveTo(x, hipY + 14, x - 38, hipY + 8);
+  ctx.closePath();
   ctx.fill();
   ctx.stroke();
 
-  drawCharacterTrait(ctx, char.id, hx, hy, headR);
+  // Outfit shading & details
+  ctx.fillStyle = look.shirtShade;
+  ctx.beginPath();
+  ctx.moveTo(x + 6, shoulderY + 4);
+  ctx.lineTo(x + 30, shoulderY + 8);
+  ctx.lineTo(x + 35, hipY + 6);
+  ctx.lineTo(x + 10, hipY + 8);
+  ctx.closePath();
+  ctx.fill();
 
-  // Eyes (with natural blink + eye_pop gag!)
-  const blink = (t % 2.8) > 2.68;
-  const eyeX1 = hx + facing * 12 - 14;
-  const eyeX2 = hx + facing * 12 + 14;
-  const eyeY = hy - 8;
-
-  if (char.action === 'eye_pop') {
-    // Giant popping cartoon eyes (inspired by reference Short!)
-    const popFactor = Math.min(1, localT * 3);
-    const bulge = 12 + popFactor * 26;
-    [eyeX1, eyeX2].forEach((ex, idx) => {
-      const targetX = ex + facing * (idx === 1 ? bulge : bulge * 0.45);
-      ctx.fillStyle = '#FFFFFF';
-      ctx.strokeStyle = '#0F172A';
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.ellipse(targetX, eyeY - 4, 17 + popFactor * 9, 20 + popFactor * 8, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-
-      // Red panic veins
-      ctx.strokeStyle = '#EF4444';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(targetX - 10, eyeY - 8);
-      ctx.lineTo(targetX - 4, eyeY - 4);
-      ctx.stroke();
-
-      // Tiny terrified pupil
-      ctx.fillStyle = '#0F172A';
-      ctx.beginPath();
-      ctx.arc(targetX + facing * 4, eyeY - 4, 4.5, 0, Math.PI * 2);
-      ctx.fill();
-    });
-  } else if (blink) {
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4;
+  if (char.id === 'boss') {
+    // White shirt V-collar + red tie
+    ctx.fillStyle = '#FFFFFF';
     ctx.beginPath();
-    ctx.moveTo(eyeX1 - 7, eyeY);
-    ctx.lineTo(eyeX1 + 7, eyeY);
-    ctx.moveTo(eyeX2 - 7, eyeY);
-    ctx.lineTo(eyeX2 + 7, eyeY);
-    ctx.stroke();
-  } else if (char.expression === 'exhausted') {
-    // Half-lidded red tired eyes
-    [eyeX1, eyeX2].forEach((ex) => {
-      ctx.fillStyle = '#FEE2E2';
-      ctx.strokeStyle = '#0F172A';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(ex, eyeY, 9, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = '#0F172A';
-      ctx.beginPath();
-      ctx.arc(ex + facing * 2, eyeY + 2, 3, 0, Math.PI * 2);
-      ctx.fill();
-      // Heavy eyelid line
-      ctx.beginPath();
-      ctx.moveTo(ex - 10, eyeY - 3);
-      ctx.lineTo(ex + 10, eyeY - 1);
-      ctx.stroke();
-    });
-  } else if (char.expression === 'laughing') {
-    // Happy curved closed laughing eyes + tear drops
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 4;
-    [eyeX1, eyeX2].forEach((ex) => {
-      ctx.beginPath();
-      ctx.arc(ex, eyeY + 4, 8, Math.PI * 1.1, Math.PI * 1.9);
-      ctx.stroke();
-    });
-    // Laughing tear drops
-    ctx.fillStyle = '#38BDF8';
-    ctx.beginPath();
-    ctx.arc(eyeX1 - 12, eyeY + 5, 4, 0, Math.PI * 2);
-    ctx.arc(eyeX2 + 12, eyeY + 5, 4, 0, Math.PI * 2);
+    ctx.moveTo(x - 12, shoulderY);
+    ctx.lineTo(x + 12, shoulderY);
+    ctx.lineTo(x, shoulderY + 34);
+    ctx.closePath();
     ctx.fill();
-  } else {
-    // Expressive round eyes with pupil
-    [eyeX1, eyeX2].forEach((ex) => {
-      ctx.fillStyle = '#FFFFFF';
-      ctx.strokeStyle = '#0F172A';
-      ctx.lineWidth = 3;
+
+    ctx.fillStyle = '#EF4444';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(x - 5, shoulderY + 4);
+    ctx.lineTo(x + 5, shoulderY + 4);
+    ctx.lineTo(x + 7, shoulderY + 52);
+    ctx.lineTo(x, shoulderY + 64);
+    ctx.lineTo(x - 7, shoulderY + 52);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  } else if (char.id === 'chacha') {
+    // Traditional vest lines
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(x - 24, shoulderY + 6, 16, 72);
+    ctx.fillRect(x + 8, shoulderY + 6, 16, 72);
+  }
+
+  // Arms + Hands
+  let leftHand = { x: x - 52, y: hipY - 12 };
+  let rightHand = { x: x + 52, y: hipY - 12 };
+
+  if (char.action === 'point_laugh') {
+    if (facing === 1) {
+      rightHand = { x: x + 84, y: shoulderY + 4 + Math.sin(globalT * 14) * 7 };
+      leftHand = { x: x - 38, y: hipY - 22 };
+    } else {
+      leftHand = { x: x - 84, y: shoulderY + 4 + Math.sin(globalT * 14) * 7 };
+      rightHand = { x: x + 38, y: hipY - 22 };
+    }
+  } else if (char.action === 'hands_up' || char.action === 'shocked_jump') {
+    leftHand = { x: x - 64, y: headY - 24 };
+    rightHand = { x: x + 64, y: headY - 24 };
+  } else if (char.action === 'facepalm') {
+    rightHand = { x: x + facing * 12, y: headY + 4 };
+    leftHand = { x: x - 48, y: hipY - 10 };
+  } else if (char.action === 'sip_tea') {
+    const sip = Math.sin(globalT * 3) * 14;
+    rightHand = { x: x + facing * 48, y: shoulderY - 14 + sip };
+  } else if (char.action === 'pour_water') {
+    rightHand = { x: x + facing * 64, y: shoulderY - 22 };
+    leftHand = { x: x - facing * 46, y: hipY - 16 };
+  } else if (char.action === 'run') {
+    leftHand = { x: x - 54 - legStride * 0.5, y: shoulderY + 34 };
+    rightHand = { x: x + 54 + legStride * 0.5, y: shoulderY + 34 };
+  } else if (char.prop !== 'none') {
+    if (facing === 1) {
+      rightHand = { x: x + 62, y: shoulderY + 18 };
+    } else {
+      leftHand = { x: x - 62, y: shoulderY + 18 };
+    }
+  }
+
+  // Draw arms with shirt sleeves + skin hands
+  [
+    { sx: x - 28, sy: shoulderY + 14, hx: leftHand.x, hy: leftHand.y },
+    { sx: x + 28, sy: shoulderY + 14, hx: rightHand.x, hy: rightHand.y },
+  ].forEach((arm) => {
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 13;
+    ctx.beginPath();
+    ctx.moveTo(arm.sx, arm.sy);
+    ctx.lineTo(arm.hx, arm.hy);
+    ctx.stroke();
+
+    ctx.strokeStyle = look.shirt;
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.moveTo(arm.sx, arm.sy);
+    ctx.lineTo((arm.sx + arm.hx) / 2, (arm.sy + arm.hy) / 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = look.skin;
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo((arm.sx + arm.hx) / 2, (arm.sy + arm.hy) / 2);
+    ctx.lineTo(arm.hx, arm.hy);
+    ctx.stroke();
+
+    ctx.fillStyle = look.skin;
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(arm.hx, arm.hy, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  });
+
+  // Props held in active hand
+  const activeHand = facing === 1 ? rightHand : leftHand;
+  drawProp(ctx, char.prop, activeHand.x, activeHand.y, globalT);
+
+  // Head
+  ctx.fillStyle = look.skin;
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(x, headY, headR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Character hair & accessories
+  if (char.id === 'rafu') {
+    ctx.fillStyle = '#0F172A';
+    ctx.beginPath();
+    ctx.moveTo(x - 36, headY - 22);
+    ctx.lineTo(x - 24, headY - 58);
+    ctx.lineTo(x - 6, headY - 40);
+    ctx.lineTo(x + 8, headY - 64);
+    ctx.lineTo(x + 22, headY - 40);
+    ctx.lineTo(x + 38, headY - 52);
+    ctx.lineTo(x + 36, headY - 20);
+    ctx.quadraticCurveTo(x, headY - 38, x - 36, headY - 22);
+    ctx.fill();
+  } else if (char.id === 'folk') {
+    // Neat hair + glasses
+    ctx.fillStyle = '#1E293B';
+    ctx.beginPath();
+    ctx.arc(x, headY - 12, headR - 2, Math.PI * 1.1, Math.PI * 1.9);
+    ctx.fill();
+  } else if (char.id === 'chacha') {
+    // Topi
+    ctx.fillStyle = '#FFFFFF';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 4;
+    drawRoundedRect(ctx, x - 30, headY - headR - 12, 60, 22, 8);
+    ctx.fill();
+    ctx.stroke();
+  } else if (char.id === 'friend') {
+    // Baseball cap
+    ctx.fillStyle = '#DC2626';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(x, headY - 18, 42, Math.PI, 0);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + facing * 12, headY - 18);
+    ctx.lineTo(x + facing * 58, headY - 12);
+    ctx.lineWidth = 7;
+    ctx.stroke();
+  }
+
+  // Facial Expressions + Blinking + Lip-sync!
+  const eyeY = headY - 6;
+  const eyeL = x - 16 + facing * 5;
+  const eyeR = x + 16 + facing * 5;
+  const blinkPhase = (globalT + baseX * 0.01) % 3.4;
+  const isBlinking = blinkPhase > 3.26 && char.expression !== 'shocked';
+
+  const isPopping =
+    char.action === 'eye_pop' || char.expression === 'shocked';
+  const eyeRSize = isPopping ? 13 : 8;
+
+  if (isBlinking || char.expression === 'laughing') {
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 4;
+    [eyeL, eyeR].forEach((ex) => {
       ctx.beginPath();
-      ctx.arc(ex, eyeY, 9.5, 0, Math.PI * 2);
+      if (char.expression === 'laughing') {
+        ctx.arc(ex, eyeY + 3, 9, Math.PI * 1.1, Math.PI * 1.9);
+      } else {
+        ctx.moveTo(ex - 7, eyeY);
+        ctx.lineTo(ex + 7, eyeY);
+      }
+      ctx.stroke();
+    });
+  } else {
+    ctx.fillStyle = '#FFFFFF';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 3;
+    [eyeL, eyeR].forEach((ex) => {
+      ctx.beginPath();
+      ctx.arc(ex, eyeY, eyeRSize, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
       ctx.fillStyle = '#0F172A';
       ctx.beginPath();
-      ctx.arc(ex + facing * 3, eyeY, 4, 0, Math.PI * 2);
+      ctx.arc(ex + facing * 2.5, eyeY, isPopping ? 4.5 : 4, 0, Math.PI * 2);
       ctx.fill();
-
-      // Smug or angry eyelid
-      if (char.expression === 'smug') {
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(ex - 10, eyeY - 11, 20, 8);
-        ctx.beginPath();
-        ctx.moveTo(ex - 10, eyeY - 3);
-        ctx.lineTo(ex + 10, eyeY - 3);
-        ctx.stroke();
-      }
+      ctx.fillStyle = '#FFFFFF';
     });
+  }
+
+  // Glasses for Folk
+  if (char.id === 'folk') {
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 3.5;
+    ctx.strokeRect(eyeL - 12, eyeY - 10, 24, 20);
+    ctx.strokeRect(eyeR - 12, eyeY - 10, 24, 20);
+    ctx.beginPath();
+    ctx.moveTo(eyeL + 12, eyeY);
+    ctx.lineTo(eyeR - 12, eyeY);
+    ctx.stroke();
   }
 
   // Eyebrows
   ctx.strokeStyle = '#0F172A';
-  ctx.lineWidth = 3.5;
+  ctx.lineWidth = 4;
   if (char.expression === 'angry') {
     ctx.beginPath();
-    ctx.moveTo(eyeX1 - 8, eyeY - 18);
-    ctx.lineTo(eyeX1 + 8, eyeY - 11);
-    ctx.moveTo(eyeX2 + 8, eyeY - 18);
-    ctx.lineTo(eyeX2 - 8, eyeY - 11);
+    ctx.moveTo(eyeL - 10, eyeY - 16);
+    ctx.lineTo(eyeL + 8, eyeY - 10);
+    ctx.moveTo(eyeR + 10, eyeY - 16);
+    ctx.lineTo(eyeR - 8, eyeY - 10);
     ctx.stroke();
-  } else if (char.expression === 'shocked' || char.action === 'eye_pop') {
+  } else if (char.expression === 'shocked' || char.expression === 'confused') {
     ctx.beginPath();
-    ctx.arc(eyeX1, eyeY - 16, 8, Math.PI, 0);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(eyeX2, eyeY - 16, 8, Math.PI, 0);
+    ctx.arc(eyeL, eyeY - 17, 10, Math.PI * 1.15, Math.PI * 1.85);
+    ctx.arc(eyeR, eyeY - 17, 10, Math.PI * 1.15, Math.PI * 1.85);
     ctx.stroke();
   }
 
-  // Animated Mouth
-  const mouthX = hx + facing * 8;
-  const mouthY = hy + 19;
-  const talkingPulse = char.speech ? Math.abs(Math.sin(t * 14)) * 7 : 0;
+  // Chacha mustache
+  if (char.id === 'chacha') {
+    ctx.fillStyle = '#E2E8F0';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.ellipse(x + facing * 4 - 8, headY + 12, 10, 5, -0.2, 0, Math.PI * 2);
+    ctx.ellipse(x + facing * 4 + 8, headY + 12, 10, 5, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
 
-  if (char.expression === 'laughing') {
-    const open = 15 + Math.sin(t * 20) * 4;
+  // Real-time Lip-Sync Mouth!
+  const mouthX = x + facing * 4;
+  const mouthY = headY + 21;
+  if (isSpeaking) {
+    const openAmt = 4 + Math.abs(Math.sin(globalT * 24)) * 10;
     ctx.fillStyle = '#991B1B';
     ctx.strokeStyle = '#0F172A';
     ctx.lineWidth = 3.5;
     ctx.beginPath();
-    ctx.arc(mouthX, mouthY - 4, 20, 0, Math.PI);
+    ctx.ellipse(mouthX, mouthY, 13, openAmt, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Tongue
+    ctx.fillStyle = '#F87171';
+    ctx.beginPath();
+    ctx.ellipse(mouthX, mouthY + openAmt * 0.35, 7, openAmt * 0.4, 0, 0, Math.PI);
+    ctx.fill();
+  } else if (char.expression === 'laughing' || char.expression === 'happy') {
+    ctx.fillStyle = '#991B1B';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.arc(mouthX, mouthY - 4, 15, 0, Math.PI);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(mouthX - 15, mouthY - 4, 30, Math.min(7, open * 0.4));
-  } else if (char.action === 'eye_pop' || char.expression === 'shocked') {
-    ctx.fillStyle = '#7F1D1D';
+  } else if (char.expression === 'shocked') {
+    ctx.fillStyle = '#991B1B';
     ctx.strokeStyle = '#0F172A';
     ctx.lineWidth = 3.5;
     ctx.beginPath();
-    ctx.ellipse(mouthX, mouthY + 4, 15, 22, 0, 0, Math.PI * 2);
+    ctx.ellipse(mouthX, mouthY + 2, 10, 14, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = '#F87171';
-    ctx.beginPath();
-    ctx.arc(mouthX, mouthY + 14, 9, Math.PI, 0);
-    ctx.fill();
-  } else if (char.expression === 'exhausted') {
-    // Open mouth + panting pink tongue!
-    const pant = Math.sin(t * 12) * 3;
-    ctx.fillStyle = '#7F1D1D';
-    ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3.5;
-    ctx.beginPath();
-    ctx.ellipse(mouthX, mouthY, 13, 10, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#FB7185';
-    ctx.beginPath();
-    ctx.roundRect(mouthX - 6, mouthY + 2, 12, 20 + pant, 6);
-    ctx.fill();
-    ctx.stroke();
-  } else if (char.expression === 'smug' || char.expression === 'happy') {
+  } else if (char.expression === 'angry' || char.expression === 'crying') {
     ctx.strokeStyle = '#0F172A';
     ctx.lineWidth = 4;
     ctx.beginPath();
-    if (talkingPulse > 2) {
-      ctx.ellipse(mouthX, mouthY, 11, talkingPulse, 0, 0, Math.PI * 2);
-    } else {
-      ctx.arc(mouthX, mouthY - 4, 15, 0.15 * Math.PI, 0.85 * Math.PI);
-    }
+    ctx.arc(mouthX, mouthY + 12, 13, Math.PI * 1.15, Math.PI * 1.85);
     ctx.stroke();
   } else {
     ctx.strokeStyle = '#0F172A';
     ctx.lineWidth = 4;
     ctx.beginPath();
-    if (talkingPulse > 2) {
-      ctx.ellipse(mouthX, mouthY, 10, talkingPulse * 0.9, 0, 0, Math.PI * 2);
-    } else {
-      ctx.moveTo(mouthX - 12, mouthY);
-      ctx.lineTo(mouthX + 12, mouthY);
-    }
+    ctx.moveTo(mouthX - 11, mouthY);
+    ctx.lineTo(mouthX + 11, mouthY);
     ctx.stroke();
   }
 
-  // Sweat drop when exhausted/shocked
+  // Sweat drops for exhausted / shocked
   if (char.expression === 'exhausted' || char.expression === 'shocked') {
-    const dropY = (t * 45) % 24;
+    const dropY = (globalT * 28) % 16;
     ctx.fillStyle = '#38BDF8';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(hx - facing * 34, hy - 14 + dropY, 5, 0, Math.PI * 2);
+    ctx.arc(x - 36, headY - 18 + dropY, 6, 0, Math.PI * 2);
     ctx.fill();
+    ctx.stroke();
   }
 
   ctx.restore();
 }
 
-function drawSpeechBubble(
+function wrapLines(
   ctx: CanvasRenderingContext2D,
   text: string,
-  cx: number,
-  cy: number,
-  tailX: number,
-  tailY: number,
-  maxW: number,
-  popProgress: number
-) {
-  if (!text.trim() || popProgress <= 0) return;
-  const scale = easeOutBack(Math.min(1, popProgress));
-
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.scale(scale, scale);
-  ctx.translate(-cx, -cy);
-
-  ctx.font = '700 26px "Hind Siliguri", "Noto Sans Bengali", sans-serif';
+  maxW: number
+): string[] {
   const words = text.trim().split(/\s+/);
   const lines: string[] = [];
-  let cur = '';
-  for (const word of words) {
-    const next = cur ? `${cur} ${word}` : word;
-    if (ctx.measureText(next).width <= maxW - 36) {
-      cur = next;
+  let line = '';
+  for (const w of words) {
+    const test = line ? `${line} ${w}` : w;
+    if (ctx.measureText(test).width > maxW && line) {
+      lines.push(line);
+      line = w;
     } else {
-      if (cur) lines.push(cur);
-      cur = word;
+      line = test;
     }
   }
-  if (cur) lines.push(cur);
+  if (line) lines.push(line);
+  return lines.slice(0, 3);
+}
 
-  const lineH = 34;
-  const textW = Math.max(
-    110,
-    ...lines.map((l) => ctx.measureText(l).width)
-  );
-  const bw = Math.min(maxW, textW + 42);
-  const bh = lines.length * lineH + 26;
-  const bx = cx - bw / 2;
-  const by = cy - bh / 2;
+function drawReelsSubtitle(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  speakerName: string,
+  badgeColor: string,
+  text: string,
+  subtitleStyle: 'reels_bold' | 'comic_bubble'
+) {
+  if (!text.trim()) return;
+  ctx.save();
 
-  // Crisp comic bubble
-  ctx.fillStyle = '#FFFFFF';
-  ctx.strokeStyle = '#0F172A';
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.roundRect(bx, by, bw, bh, 20);
+  if (subtitleStyle === 'comic_bubble') {
+    ctx.font = '700 28px "Hind Siliguri", "Noto Sans Bengali", sans-serif';
+    const lines = wrapLines(ctx, text, w - 120);
+    const boxW = Math.min(w - 64, Math.max(240, ...lines.map((l) => ctx.measureText(l).width + 64)));
+    const boxH = lines.length * 36 + 40;
+    const bx = (w - boxW) / 2;
+    const by = 135;
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 5;
+    drawRoundedRect(ctx, bx, by, boxW, boxH, 22);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#0F172A';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    lines.forEach((ln, i) => {
+      ctx.fillText(ln, w / 2, by + 34 + i * 36);
+    });
+    ctx.restore();
+    return;
+  }
+
+  // Modern Reels Bold Subtitle Card at lower-third
+  ctx.font = '700 32px "Hind Siliguri", "Noto Sans Bengali", sans-serif';
+  const lines = wrapLines(ctx, text, w - 100);
+  const boxW = w - 64;
+  const boxH = lines.length * 42 + 64;
+  const bx = 32;
+  const by = h - boxH - 58;
+
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+  ctx.strokeStyle = badgeColor;
+  ctx.lineWidth = 3.5;
+  drawRoundedRect(ctx, bx, by, boxW, boxH, 18);
   ctx.fill();
   ctx.stroke();
 
-  // Pointer tail
-  ctx.fillStyle = '#FFFFFF';
-  ctx.beginPath();
-  ctx.moveTo(cx - 12, by + bh - 2);
-  ctx.lineTo(tailX, tailY);
-  ctx.lineTo(cx + 14, by + bh - 2);
-  ctx.closePath();
+  // Speaker pill tag on top edge of subtitle card
+  ctx.font = '700 20px "Hind Siliguri", "Noto Sans Bengali", sans-serif';
+  const nameW = Math.max(88, ctx.measureText(speakerName).width + 28);
+  ctx.fillStyle = badgeColor;
+  drawRoundedRect(ctx, bx + 20, by - 16, nameW, 30, 8);
   ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(cx - 12, by + bh);
-  ctx.lineTo(tailX, tailY);
-  ctx.lineTo(cx + 14, by + bh);
-  ctx.stroke();
 
   ctx.fillStyle = '#0F172A';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  lines.forEach((line, idx) => {
-    ctx.fillText(line, cx, by + 13 + lineH * (idx + 0.5));
+  ctx.fillText(speakerName, bx + 20 + nameW / 2, by - 1);
+
+  // Bold high-contrast Bangla caption lines
+  ctx.font = '700 32px "Hind Siliguri", "Noto Sans Bengali", sans-serif';
+  ctx.fillStyle = '#F8FAFC';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  lines.forEach((ln, i) => {
+    ctx.fillText(ln, w / 2, by + 44 + i * 42);
   });
 
   ctx.restore();
@@ -978,45 +915,81 @@ function drawVideoWatermark(
   h: number,
   branding: BrandingConfig
 ) {
+  const text = (branding.logoText || '@@RAFU FOLK@@').trim();
+  if (!text) return;
   ctx.save();
-  ctx.globalAlpha = Math.max(0.45, Math.min(1, branding.logoOpacity ?? 0.9));
-  const label = branding.logoText || '@@RAFU FOLK@@';
-  ctx.font = '800 20px "Plus Jakarta Sans", "Hind Siliguri", sans-serif';
-  const tw = ctx.measureText(label).width;
-  const padX = 16;
-  const boxW = tw + padX * 2;
-  const boxH = 38;
-  const x = w - boxW - 24;
-  const y = h - boxH - 28;
+  ctx.globalAlpha = Math.max(0.25, Math.min(1, branding.logoOpacity));
+  ctx.font = '800 22px "Plus Jakarta Sans", "Hind Siliguri", sans-serif';
+  const tw = ctx.measureText(text).width + 28;
+  const padX = w - tw - 24;
+  const padY = 26;
 
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-  ctx.beginPath();
-  ctx.roundRect(x, y, boxW, boxH, 10);
+  ctx.fillStyle = '#0F172A';
+  ctx.strokeStyle = '#FACC15';
+  ctx.lineWidth = 2.5;
+  drawRoundedRect(ctx, padX, padY, tw, 38, 10);
   ctx.fill();
+  ctx.stroke();
 
   ctx.fillStyle = '#FACC15';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, x + boxW / 2, y + boxH / 2 + 1);
+  ctx.fillText(text, padX + tw / 2, padY + 19);
   ctx.restore();
 }
 
 export function getSceneAtTime(
   script: VideoScript,
   timeSec: number
-): { scene: VideoScene; localT: number; progress: number } {
+): { scene: VideoScene; localT: number; sceneStart: number } {
   let cursor = 0;
-  for (const scene of script.scenes) {
-    const end = cursor + scene.durationSec;
-    if (timeSec <= end || scene === script.scenes[script.scenes.length - 1]) {
-      const localT = Math.max(0, timeSec - cursor);
-      const progress = Math.max(0, Math.min(1, localT / Math.max(0.1, scene.durationSec)));
-      return { scene, localT, progress };
+  for (const sc of script.scenes) {
+    if (timeSec <= cursor + sc.durationSec) {
+      return { scene: sc, localT: Math.max(0, timeSec - cursor), sceneStart: cursor };
     }
-    cursor = end;
+    cursor += sc.durationSec;
   }
-  const fallback = script.scenes[0];
-  return { scene: fallback, localT: 0, progress: 0 };
+  const last = script.scenes[script.scenes.length - 1];
+  return {
+    scene: last,
+    localT: last ? last.durationSec : 0,
+    sceneStart: Math.max(0, cursor - (last?.durationSec || 0)),
+  };
+}
+
+function getActiveSpeakerAtTime(
+  script: VideoScript,
+  scene: VideoScene,
+  localT: number
+): { charIndex: number; text: string } {
+  const voiceClips: VideoVoiceClip[] = (script.voiceClips || []).filter(
+    (c) => c.sceneIndex === scene.sceneIndex
+  );
+  if (voiceClips.length > 0) {
+    const active = voiceClips.find(
+      (c) => localT >= c.offsetInSceneSec && localT <= c.offsetInSceneSec + c.durationSec + 0.15
+    );
+    if (active) {
+      return { charIndex: active.charIndex, text: active.text };
+    }
+    // Between clips: show latest clip up to localT
+    const past = voiceClips.filter((c) => localT >= c.offsetInSceneSec);
+    if (past.length > 0) {
+      const last = past[past.length - 1];
+      return { charIndex: -1, text: last.text };
+    }
+    return { charIndex: -1, text: '' };
+  }
+
+  // Fallback without voiceClips: alternate characters across scene duration
+  const speakers = scene.characters
+    .map((c, idx) => ({ idx, speech: (c.speech || '').trim() }))
+    .filter((s) => s.speech.length > 0);
+  if (speakers.length === 0) return { charIndex: -1, text: '' };
+
+  const slice = scene.durationSec / speakers.length;
+  const pickIdx = Math.min(speakers.length - 1, Math.floor(localT / Math.max(0.1, slice)));
+  return { charIndex: speakers[pickIdx].idx, text: speakers[pickIdx].speech };
 }
 
 export function renderVideoFrame(
@@ -1034,125 +1007,112 @@ export function renderVideoFrame(
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
-  const { scene, localT, progress } = getSceneAtTime(script, timeSec);
-  const groundY = Math.round(h * 0.77);
+  const { scene, localT } = getSceneAtTime(script, timeSec);
+  if (!scene) return;
 
-  ctx.clearRect(0, 0, w, h);
+  const groundY = Math.round(h * 0.74);
 
-  // Camera zoom & shake transform
+  // Camera transform
   ctx.save();
-  const zoomEase = easeInOutCubic(Math.min(1, progress * 1.35));
-  let zoom = 1;
-  let focusX = w * 0.5;
-  let focusY = groundY - 180;
+  let camScale = 1;
+  let camFocusX = w / 2;
+  let camFocusY = h * 0.56;
   let shakeX = 0;
   let shakeY = 0;
 
   if (scene.camera === 'zoom_left') {
-    zoom = 1 + 0.28 * zoomEase;
-    focusX = w * 0.3;
+    camScale = 1 + 0.18 * easeInOutCubic(Math.min(1, localT / Math.max(0.8, scene.durationSec * 0.7)));
+    camFocusX = w * 0.34;
   } else if (scene.camera === 'zoom_right') {
-    zoom = 1 + 0.28 * zoomEase;
-    focusX = w * 0.7;
+    camScale = 1 + 0.18 * easeInOutCubic(Math.min(1, localT / Math.max(0.8, scene.durationSec * 0.7)));
+    camFocusX = w * 0.66;
   } else if (scene.camera === 'zoom_center') {
-    zoom = 1 + 0.22 * zoomEase;
-    focusX = w * 0.5;
+    camScale = 1 + 0.14 * easeInOutCubic(Math.min(1, localT / Math.max(0.8, scene.durationSec * 0.7)));
   } else if (scene.camera === 'shake') {
-    zoom = 1.06;
-    shakeX = Math.sin(timeSec * 45) * 6;
-    shakeY = Math.cos(timeSec * 38) * 4;
+    shakeX = Math.sin(timeSec * 44) * 9;
+    shakeY = Math.cos(timeSec * 38) * 6;
   }
 
   ctx.translate(w / 2 + shakeX, h / 2 + shakeY);
-  ctx.scale(zoom, zoom);
-  ctx.translate(-focusX, -focusY);
+  ctx.scale(camScale, camScale);
+  ctx.translate(-camFocusX, -camFocusY);
 
   drawThemeBackground(ctx, w, h, scene.theme, timeSec, localT, groundY);
 
-  // Draw characters
-  const chars = scene.characters.slice(0, 2);
-  const charMeta: Array<{ char: VideoCharacterState; cx: number }> = [];
-  chars.forEach((char, idx) => {
-    let cx = w * 0.5;
-    let facing: 1 | -1 = 1;
-    if (chars.length === 2) {
-      if (char.side === 'left' || (char.side !== 'right' && idx === 0)) {
-        cx = w * 0.29;
-        facing = 1;
-      } else {
-        cx = w * 0.71;
-        facing = -1;
-      }
-    } else if (char.side === 'left') {
-      cx = w * 0.34;
-      facing = 1;
-    } else if (char.side === 'right') {
-      cx = w * 0.66;
-      facing = -1;
-    }
+  const activeSpeaker = getActiveSpeakerAtTime(script, scene, localT);
 
-    drawAnimatedCharacter(ctx, char, cx, groundY, facing, timeSec, localT);
-    charMeta.push({ char, cx });
-  });
-
-  // Draw speech bubbles inside camera space (clamped so they remain crisp)
-  const speakers = charMeta.filter((m) => m.char.speech && m.char.speech.trim());
-  speakers.forEach((m, sIdx) => {
-    const bubbleDelay = sIdx * 0.45;
-    const popProg = (localT - bubbleDelay) / 0.28;
-    const bubbleW = speakers.length === 2 ? w * 0.44 : w * 0.76;
-    const bx =
-      speakers.length === 2
-        ? sIdx === 0
-          ? w * 0.27
-          : w * 0.73
-        : Math.max(w * 0.24, Math.min(w * 0.76, m.cx));
-    const by = sIdx === 1 ? groundY - 360 : groundY - 395;
-    drawSpeechBubble(
+  // Draw layered cartoon characters
+  scene.characters.forEach((ch, idx) => {
+    const posX =
+      ch.side === 'left'
+        ? w * 0.3
+        : ch.side === 'right'
+          ? w * 0.7
+          : w * 0.5;
+    const facing: 1 | -1 = ch.side === 'right' ? -1 : 1;
+    const isSpeaking = activeSpeaker.charIndex === idx;
+    drawLayeredCartoonCharacter(
       ctx,
-      m.char.speech!,
-      bx,
-      by,
-      m.cx,
-      groundY - 275,
-      bubbleW,
-      popProg
+      ch,
+      posX,
+      groundY,
+      facing,
+      timeSec,
+      localT,
+      scene.durationSec,
+      isSpeaking
     );
   });
 
   ctx.restore();
 
-  // Top scene caption banner (non-zoomed HUD layer)
+  // Top-left Scene Caption Badge
   if (scene.captionTop && scene.captionTop.trim()) {
     ctx.save();
     ctx.font = '700 22px "Hind Siliguri", "Noto Sans Bengali", sans-serif';
     const capText = scene.captionTop.trim();
-    const capW = Math.min(w - 48, ctx.measureText(capText).width + 38);
-    const capX = (w - capW) / 2;
-    const capY = 34;
-
-    ctx.fillStyle = '#FEF08A';
+    const tw = Math.min(w - 220, ctx.measureText(capText).width + 36);
+    ctx.fillStyle = 'rgba(250, 204, 21, 0.96)';
     ctx.strokeStyle = '#0F172A';
-    ctx.lineWidth = 3.5;
-    ctx.beginPath();
-    ctx.roundRect(capX, capY, capW, 44, 10);
+    ctx.lineWidth = 3;
+    drawRoundedRect(ctx, 24, 26, tw, 40, 10);
     ctx.fill();
     ctx.stroke();
 
     ctx.fillStyle = '#0F172A';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(capText, w / 2, capY + 23);
+    ctx.fillText(capText, 24 + tw / 2, 46);
     ctx.restore();
   }
 
-  // Bottom progress subtle hairline + watermark
+  // Reels Bold Subtitle or Comic Bubble
+  if (activeSpeaker.text) {
+    const speakingChar =
+      activeSpeaker.charIndex >= 0
+        ? scene.characters[activeSpeaker.charIndex]
+        : scene.characters.find((c) => c.speech === activeSpeaker.text) || scene.characters[0];
+    const badgeColor = speakingChar
+      ? getCharacterAppearance(speakingChar.id).badgeColor
+      : '#FACC15';
+    drawReelsSubtitle(
+      ctx,
+      w,
+      h,
+      speakingChar?.name || '@@RAFU FOLK@@',
+      badgeColor,
+      activeSpeaker.text,
+      script.subtitleStyle || 'reels_bold'
+    );
+  }
+
+  // Top Progress Bar
   ctx.save();
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
-  ctx.fillRect(24, h - 14, w - 48, 4);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+  ctx.fillRect(24, h - 18, w - 48, 5);
   ctx.fillStyle = '#FACC15';
   const progRatio = Math.min(1, timeSec / Math.max(0.1, script.totalDurationSec));
-  ctx.fillRect(24, h - 14, (w - 48) * progRatio, 4);
+  ctx.fillRect(24, h - 18, (w - 48) * progRatio, 5);
   ctx.restore();
 
   drawVideoWatermark(ctx, w, h, branding);
@@ -1167,22 +1127,27 @@ export interface RenderedVideoResult {
 }
 
 function pickSupportedRecorderMime(): {
-  mimeType: string;
+  recorderMime: string;
+  baseMime: 'video/mp4' | 'video/webm';
   extension: 'mp4' | 'webm';
 } {
-  const candidates: Array<{ mimeType: string; extension: 'mp4' | 'webm' }> = [
-    { mimeType: 'video/mp4;codecs=avc1,mp4a.40.2', extension: 'mp4' },
-    { mimeType: 'video/mp4', extension: 'mp4' },
-    { mimeType: 'video/webm;codecs=vp9,opus', extension: 'webm' },
-    { mimeType: 'video/webm;codecs=vp8,opus', extension: 'webm' },
-    { mimeType: 'video/webm', extension: 'webm' },
+  const candidates: Array<{
+    recorderMime: string;
+    baseMime: 'video/mp4' | 'video/webm';
+    extension: 'mp4' | 'webm';
+  }> = [
+    { recorderMime: 'video/mp4;codecs=avc1,mp4a.40.2', baseMime: 'video/mp4', extension: 'mp4' },
+    { recorderMime: 'video/mp4', baseMime: 'video/mp4', extension: 'mp4' },
+    { recorderMime: 'video/webm;codecs=vp9,opus', baseMime: 'video/webm', extension: 'webm' },
+    { recorderMime: 'video/webm;codecs=vp8,opus', baseMime: 'video/webm', extension: 'webm' },
+    { recorderMime: 'video/webm', baseMime: 'video/webm', extension: 'webm' },
   ];
   for (const c of candidates) {
-    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c.mimeType)) {
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c.recorderMime)) {
       return c;
     }
   }
-  return { mimeType: 'video/webm', extension: 'webm' };
+  return { recorderMime: 'video/webm', baseMime: 'video/webm', extension: 'webm' };
 }
 
 export async function recordVideoFromScript(
@@ -1190,6 +1155,7 @@ export async function recordVideoFromScript(
   branding: BrandingConfig,
   onProgress?: (pct: number) => void
 ): Promise<RenderedVideoResult> {
+  await preloadThemeBackgrounds();
   if (document.fonts && document.fonts.ready) {
     await document.fonts.ready;
   }
@@ -1199,7 +1165,6 @@ export async function recordVideoFromScript(
   canvas.width = width;
   canvas.height = height;
 
-  // Render first frame before capture starts
   renderVideoFrame(canvas, script, branding, 0);
 
   const canvasStream = canvas.captureStream(30);
@@ -1214,10 +1179,10 @@ export async function recordVideoFromScript(
     ...audioSession.stream.getAudioTracks(),
   ]);
 
-  const { mimeType, extension } = pickSupportedRecorderMime();
+  const { recorderMime, baseMime, extension } = pickSupportedRecorderMime();
   const chunks: BlobPart[] = [];
   const recorder = new MediaRecorder(combinedStream, {
-    mimeType,
+    mimeType: recorderMime,
     videoBitsPerSecond: 3_500_000,
   });
 
@@ -1242,12 +1207,13 @@ export async function recordVideoFromScript(
       cancelAnimationFrame(rafId);
       audioSession.stop();
       combinedStream.getTracks().forEach((t) => t.stop());
-      const blob = new Blob(chunks, { type: mimeType });
+      // Use clean baseMime (no unquoted ;codecs= parameter!) so FormData/Multer always preserves valid MIME
+      const blob = new Blob(chunks, { type: baseMime });
       const objectUrl = URL.createObjectURL(blob);
       onProgress?.(100);
       resolve({
         blob,
-        mimeType,
+        mimeType: baseMime,
         extension,
         objectUrl,
         durationSec: script.totalDurationSec,
@@ -1262,7 +1228,7 @@ export async function recordVideoFromScript(
       renderVideoFrame(canvas, script, branding, elapsedSec);
       onProgress?.(Math.min(99, Math.round((elapsedMs / totalMs) * 100)));
 
-      if (elapsedMs < totalMs + 120) {
+      if (elapsedMs < totalMs + 160) {
         rafId = requestAnimationFrame(step);
       } else {
         if (recorder.state === 'recording') {

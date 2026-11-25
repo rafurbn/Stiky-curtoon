@@ -1,4 +1,4 @@
-import type { VideoMusicStyle, VideoScript, VideoSfx, VideoTheme } from '../types/comic';
+import type { VideoMusicStyle, VideoScript, VideoSfx, VideoVoiceClip } from '../types/comic';
 
 export interface AudioSession {
   stream: MediaStream;
@@ -13,7 +13,6 @@ function createNoiseBuffer(ctx: AudioContext, seconds = 2): AudioBuffer {
   let lastOut = 0;
   for (let i = 0; i < length; i++) {
     const white = Math.random() * 2 - 1;
-    // Soft pink-ish filtering
     data[i] = (lastOut + 0.04 * white) / 1.04;
     lastOut = data[i];
     data[i] *= 2.5;
@@ -33,199 +32,209 @@ function triggerSfx(
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(320, startTime);
-    osc.frequency.exponentialRampToValueAtTime(920, startTime + 0.08);
+    osc.frequency.setValueAtTime(340, startTime);
+    osc.frequency.exponentialRampToValueAtTime(980, startTime + 0.08);
     gain.gain.setValueAtTime(0.001, startTime);
-    gain.gain.linearRampToValueAtTime(0.24, startTime + 0.015);
-    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.12);
+    gain.gain.linearRampToValueAtTime(0.22, startTime + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.13);
     osc.connect(gain).connect(target);
     osc.start(startTime);
-    osc.stop(startTime + 0.13);
+    osc.stop(startTime + 0.14);
     return;
   }
 
   if (sfx === 'laugh') {
-    // Playful comic "Ha-ha-ha-ha!" staccato bursts
-    const pitches = [440, 490, 460, 520, 480];
+    const pitches = [420, 480, 450, 510, 460];
     pitches.forEach((freq, idx) => {
-      const t = startTime + 0.18 + idx * 0.16;
+      const t = startTime + 0.12 + idx * 0.14;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(freq, t);
-      osc.frequency.exponentialRampToValueAtTime(freq * 0.72, t + 0.11);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.72, t + 0.1);
       gain.gain.setValueAtTime(0.001, t);
-      gain.gain.linearRampToValueAtTime(0.22, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      gain.gain.linearRampToValueAtTime(0.16, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
       osc.connect(gain).connect(target);
       osc.start(t);
-      osc.stop(t + 0.13);
+      osc.stop(t + 0.12);
     });
     return;
   }
 
   if (sfx === 'gasp') {
-    // Cartoon upward slide whistle + shock hit
+    // Dramatic Vine-style shock sting + gasp
+    const sub = ctx.createOscillator();
+    const subGain = ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(140, startTime);
+    sub.frequency.exponentialRampToValueAtTime(42, startTime + 0.35);
+    subGain.gain.setValueAtTime(0.32, startTime);
+    subGain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.38);
+    sub.connect(subGain).connect(target);
+    sub.start(startTime);
+    sub.stop(startTime + 0.4);
+
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(280, startTime + 0.05);
-    osc.frequency.exponentialRampToValueAtTime(1180, startTime + 0.36);
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(320, startTime + 0.05);
+    osc.frequency.exponentialRampToValueAtTime(920, startTime + 0.24);
     gain.gain.setValueAtTime(0.001, startTime + 0.05);
-    gain.gain.linearRampToValueAtTime(0.24, startTime + 0.12);
-    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.42);
+    gain.gain.linearRampToValueAtTime(0.14, startTime + 0.1);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.3);
     osc.connect(gain).connect(target);
     osc.start(startTime + 0.05);
-    osc.stop(startTime + 0.44);
+    osc.stop(startTime + 0.32);
     return;
   }
 
   if (sfx === 'thunder') {
     const noise = ctx.createBufferSource();
-    noise.buffer = createNoiseBuffer(ctx, 1.8);
+    noise.buffer = createNoiseBuffer(ctx, 2.0);
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(420, startTime + 0.1);
-    filter.frequency.exponentialRampToValueAtTime(95, startTime + 1.5);
+    filter.frequency.setValueAtTime(480, startTime);
+    filter.frequency.exponentialRampToValueAtTime(75, startTime + 1.5);
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.001, startTime + 0.1);
-    gain.gain.linearRampToValueAtTime(0.45, startTime + 0.22);
-    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 1.65);
+    gain.gain.setValueAtTime(0.001, startTime);
+    gain.gain.linearRampToValueAtTime(0.32, startTime + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 1.6);
     noise.connect(filter).connect(gain).connect(target);
-    noise.start(startTime + 0.1);
-    noise.stop(startTime + 1.7);
+    noise.start(startTime);
+    noise.stop(startTime + 1.65);
     return;
   }
 
   if (sfx === 'pour') {
-    // Bubbly water glugs + surprise pop
-    for (let i = 0; i < 8; i++) {
-      const t = startTime + 0.15 + i * 0.14;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      const base = 360 + (i % 3) * 110 + i * 25;
-      osc.frequency.setValueAtTime(base, t);
-      osc.frequency.exponentialRampToValueAtTime(base * 1.55, t + 0.09);
-      gain.gain.setValueAtTime(0.001, t);
-      gain.gain.linearRampToValueAtTime(0.18, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
-      osc.connect(gain).connect(target);
-      osc.start(t);
-      osc.stop(t + 0.11);
-    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = createNoiseBuffer(ctx, 1.4);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1100, startTime);
+    filter.frequency.linearRampToValueAtTime(1900, startTime + 1.1);
+    filter.Q.value = 3.2;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.001, startTime);
+    gain.gain.linearRampToValueAtTime(0.18, startTime + 0.12);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 1.2);
+    noise.connect(filter).connect(gain).connect(target);
+    noise.start(startTime);
+    noise.stop(startTime + 1.25);
     return;
   }
 
   if (sfx === 'punchline') {
-    // Classic comedic ba-dum-tss + boing
-    const hitTimes = [0.1, 0.28, 0.48];
-    const hitFreqs = [180, 220, 660];
-    hitTimes.forEach((offset, idx) => {
+    // Rimshot Ba-dum-tss!
+    const hits = [0, 0.14];
+    hits.forEach((offset, idx) => {
       const t = startTime + offset;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = idx === 2 ? 'triangle' : 'sine';
-      osc.frequency.setValueAtTime(hitFreqs[idx], t);
-      osc.frequency.exponentialRampToValueAtTime(
-        idx === 2 ? 980 : 90,
-        t + (idx === 2 ? 0.28 : 0.14)
-      );
-      gain.gain.setValueAtTime(0.001, t);
-      gain.gain.linearRampToValueAtTime(0.28, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(idx === 0 ? 190 : 140, t);
+      osc.frequency.exponentialRampToValueAtTime(60, t + 0.1);
+      gain.gain.setValueAtTime(0.28, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
       osc.connect(gain).connect(target);
       osc.start(t);
-      osc.stop(t + 0.32);
+      osc.stop(t + 0.13);
     });
+    const cymbal = ctx.createBufferSource();
+    cymbal.buffer = createNoiseBuffer(ctx, 0.6);
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 3800;
+    const cGain = ctx.createGain();
+    cGain.gain.setValueAtTime(0.18, startTime + 0.3);
+    cGain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.72);
+    cymbal.connect(hp).connect(cGain).connect(target);
+    cymbal.start(startTime + 0.3);
+    cymbal.stop(startTime + 0.75);
     return;
   }
 
   if (sfx === 'sad_trombone') {
-    // Wah-wah-wah-waaaah
-    const notes = [
-      { f1: 311, f2: 293, dur: 0.28, at: 0.15 },
-      { f1: 293, f2: 277, dur: 0.28, at: 0.48 },
-      { f1: 277, f2: 261, dur: 0.28, at: 0.81 },
-      { f1: 261, f2: 205, dur: 0.85, at: 1.14 },
-    ];
-    notes.forEach((n) => {
-      const t = startTime + n.at;
+    const notes = [311.13, 293.66, 277.18, 261.63];
+    notes.forEach((freq, idx) => {
+      const t = startTime + idx * 0.28;
+      const dur = idx === 3 ? 0.62 : 0.22;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sawtooth';
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(900, t);
-      osc.frequency.setValueAtTime(n.f1, t);
-      osc.frequency.linearRampToValueAtTime(n.f2, t + n.dur);
+      osc.frequency.setValueAtTime(freq, t);
+      if (idx === 3) {
+        osc.frequency.linearRampToValueAtTime(freq * 0.88, t + dur);
+      }
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 1100;
       gain.gain.setValueAtTime(0.001, t);
-      gain.gain.linearRampToValueAtTime(0.14, t + 0.03);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + n.dur);
-      osc.connect(filter).connect(gain).connect(target);
+      gain.gain.linearRampToValueAtTime(0.12, t + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(lp).connect(gain).connect(target);
       osc.start(t);
-      osc.stop(t + n.dur + 0.02);
+      osc.stop(t + dur + 0.05);
     });
   }
 }
 
 function scheduleBackgroundMusic(
   ctx: AudioContext,
-  target: AudioNode,
-  musicStyle: VideoMusicStyle,
-  themesPresent: VideoTheme[],
-  totalDurationSec: number,
-  startTime: number
+  musicTarget: GainNode,
+  style: VideoMusicStyle,
+  totalSec: number,
+  startOffsetSec: number
 ) {
-  // Subtle ambient rain hiss if rain_storm is in any scene
-  if (themesPresent.includes('rain_storm')) {
-    const rain = ctx.createBufferSource();
-    rain.buffer = createNoiseBuffer(ctx, 2);
-    rain.loop = true;
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.setValueAtTime(1400, startTime);
-    bp.Q.setValueAtTime(0.8, startTime);
-    const rainGain = ctx.createGain();
-    rainGain.gain.setValueAtTime(0.06, startTime);
-    rain.connect(bp).connect(rainGain).connect(target);
-    rain.start(startTime);
-    rain.stop(startTime + Math.min(totalDurationSec, 4.5));
-  }
+  if (style === 'none') return;
 
-  if (musicStyle === 'none') return;
-
-  const patterns: Record<Exclude<VideoMusicStyle, 'none'>, number[]> = {
-    comedy: [261.6, 329.6, 392.0, 329.6, 293.7, 349.2, 440.0, 392.0],
-    quirky: [329.6, 392.0, 311.1, 392.0, 293.7, 349.2, 329.6, 261.6],
-    dramatic: [220.0, 220.0, 261.6, 246.9, 220.0, 196.0, 220.0, 174.6],
+  const tempo = style === 'dramatic' ? 0.34 : style === 'quirky' ? 0.25 : 0.28;
+  const scales: Record<Exclude<VideoMusicStyle, 'none'>, number[]> = {
+    comedy: [261.63, 329.63, 392.0, 329.63, 293.66, 349.23, 392.0, 440.0],
+    quirky: [293.66, 349.23, 440.0, 415.3, 349.23, 392.0, 493.88, 349.23],
+    dramatic: [196.0, 233.08, 261.63, 233.08, 196.0, 185.0, 196.0, 146.83],
   };
-
-  const notes = patterns[musicStyle];
-  const stepSec = musicStyle === 'dramatic' ? 0.42 : 0.3;
-  const steps = Math.floor(totalDurationSec / stepSec);
+  const notes = scales[style];
+  const baseTime = ctx.currentTime + 0.05;
+  const remaining = Math.max(0, totalSec - startOffsetSec);
+  const steps = Math.floor(remaining / tempo);
 
   for (let i = 0; i < steps; i++) {
-    const t = startTime + i * stepSec;
+    const absTime = startOffsetSec + i * tempo;
+    const t = baseTime + (absTime - startOffsetSec);
     const freq = notes[i % notes.length];
+
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    osc.type = musicStyle === 'dramatic' ? 'triangle' : 'sine';
+    osc.type = style === 'dramatic' ? 'triangle' : 'sine';
     osc.frequency.setValueAtTime(freq, t);
     gain.gain.setValueAtTime(0.001, t);
-    gain.gain.linearRampToValueAtTime(0.085, t + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + stepSec * 0.85);
-    osc.connect(gain).connect(target);
+    gain.gain.linearRampToValueAtTime(0.06, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + tempo * 0.78);
+    osc.connect(gain).connect(musicTarget);
     osc.start(t);
-    osc.stop(t + stepSec * 0.9);
+    osc.stop(t + tempo * 0.85);
+  }
+}
+
+async function decodeVoiceBuffer(
+  ctx: AudioContext,
+  dataUrl: string
+): Promise<AudioBuffer | null> {
+  try {
+    const res = await fetch(dataUrl);
+    const arr = await res.arrayBuffer();
+    return await ctx.decodeAudioData(arr);
+  } catch {
+    return null;
   }
 }
 
 export function startVideoAudioSession(
   script: VideoScript,
-  options: {
-    outputToSpeakers: boolean;
-    outputToStream: boolean;
+  options?: {
+    outputToSpeakers?: boolean;
+    outputToStream?: boolean;
     startOffsetSec?: number;
   }
 ): AudioSession {
@@ -233,51 +242,101 @@ export function startVideoAudioSession(
     window.AudioContext ||
     (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const ctx = new AudioCtx();
+  if (ctx.state === 'suspended') {
+    ctx.resume().catch(() => {});
+  }
+
   const master = ctx.createGain();
-  master.gain.setValueAtTime(0.85, ctx.currentTime);
+  master.gain.value = 0.95;
+
+  const musicBus = ctx.createGain();
+  musicBus.gain.value = 0.55;
+  musicBus.connect(master);
+
+  const sfxBus = ctx.createGain();
+  sfxBus.gain.value = 0.65;
+  sfxBus.connect(master);
+
+  const voiceBus = ctx.createGain();
+  voiceBus.gain.value = 1.0;
+  voiceBus.connect(master);
 
   const dest = ctx.createMediaStreamDestination();
-  if (options.outputToSpeakers) {
+  if (options?.outputToSpeakers !== false) {
     master.connect(ctx.destination);
   }
-  if (options.outputToStream) {
+  if (options?.outputToStream) {
     master.connect(dest);
   }
 
-  const startOffset = options.startOffsetSec ?? 0;
-  const baseTime = ctx.currentTime + 0.04;
-  const remaining = Math.max(0.5, script.totalDurationSec - startOffset);
+  const startOffsetSec = options?.startOffsetSec ?? 0;
+  const baseTime = ctx.currentTime + 0.05;
 
-  const themes = script.scenes.map((s) => s.theme);
-  scheduleBackgroundMusic(
-    ctx,
-    master,
-    script.musicStyle,
-    themes,
-    remaining,
-    baseTime
-  );
+  // Schedule background music (automatically ducked when voices play)
+  scheduleBackgroundMusic(ctx, musicBus, script.musicStyle, script.totalDurationSec, startOffsetSec);
 
+  // Build scene start timestamps
+  const sceneStarts: number[] = [];
   let cursor = 0;
   for (const scene of script.scenes) {
+    sceneStarts.push(cursor);
     const sceneEnd = cursor + scene.durationSec;
-    if (sceneEnd > startOffset) {
-      const relStart = Math.max(0, cursor - startOffset);
-      triggerSfx(ctx, master, scene.sfx, baseTime + relStart);
+    if (sceneEnd > startOffsetSec) {
+      const sfxAt = Math.max(startOffsetSec, cursor + 0.08);
+      const when = baseTime + (sfxAt - startOffsetSec);
+      if (cursor >= startOffsetSec - 0.3) {
+        triggerSfx(ctx, sfxBus, scene.sfx, when);
+      }
     }
     cursor = sceneEnd;
+  }
+
+  // Schedule synthesized AI voiceover clips & duck BGM while talking
+  let stopped = false;
+  const voiceClips: VideoVoiceClip[] = script.voiceClips || [];
+
+  if (voiceClips.length > 0) {
+    voiceClips.forEach((clip) => {
+      const sceneStart = sceneStarts[clip.sceneIndex] ?? 0;
+      const absStart = sceneStart + clip.offsetInSceneSec;
+      const absEnd = absStart + clip.durationSec;
+      if (absEnd <= startOffsetSec) return;
+
+      // Duck music bus smoothly around speech
+      const duckStart = baseTime + Math.max(0, absStart - startOffsetSec);
+      const duckEnd = baseTime + Math.max(0.05, absEnd - startOffsetSec);
+      musicBus.gain.setTargetAtTime(0.22, duckStart, 0.05);
+      musicBus.gain.setTargetAtTime(0.58, duckEnd, 0.08);
+
+      decodeVoiceBuffer(ctx, clip.audioDataUrl).then((audioBuffer) => {
+        if (stopped || !audioBuffer || ctx.state === 'closed') return;
+        const src = ctx.createBufferSource();
+        src.buffer = audioBuffer;
+        src.connect(voiceBus);
+
+        if (absStart >= startOffsetSec) {
+          src.start(baseTime + (absStart - startOffsetSec));
+        } else {
+          const skipOffset = startOffsetSec - absStart;
+          if (skipOffset < audioBuffer.duration) {
+            src.start(baseTime, skipOffset);
+          }
+        }
+      });
+    });
   }
 
   return {
     stream: dest.stream,
     stop: () => {
+      stopped = true;
       try {
         master.disconnect();
         if (ctx.state !== 'closed') {
-          void ctx.close();
+          ctx.close().catch(() => {});
         }
       } catch {
-        // Ignore cleanup errors
+        // Ignore teardown errors
       }
     },
   };

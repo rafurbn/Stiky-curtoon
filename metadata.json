@@ -1,6 +1,6 @@
 {
-  "name": "@@RAFU FOLK@@ Comic Studio",
-  "description": "Zero-script AI Bengali stick cartoon generator and Facebook Page auto-poster with programmatic Canvas illustration and @@RAFU FOLK@@ branding.",
+  "name": "@@RAFU FOLK@@ AI Cartoon & Reels Studio",
+  "description": "Free automated Bengali AI cartoon and viral Reels video generator with neural voiceover, 2D layered animation, FFmpeg MP4 export, and Facebook Page auto-posting.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

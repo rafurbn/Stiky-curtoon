@@ -1,24 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  LayoutGrid,
   Film,
-  Stamp,
-  Share2,
   History,
-  Wand2,
+  LayoutGrid,
   Send,
+  Share2,
+  Stamp,
+  Wand2,
 } from 'lucide-react';
-import { renderComicToCanvas } from './lib/cartoonRenderer';
-import { STARTER_COMIC, STARTER_COMICS } from './lib/defaultComic';
-import { STARTER_VIDEO, STARTER_VIDEOS } from './lib/defaultVideos';
-import type { RenderedVideoResult } from './lib/videoRenderer';
+import type {
+  AutomationSettings,
+  ComicItem,
+  LayoutMode,
+  VideoItem,
+} from './types/comic';
+import { STARTER_COMICS } from './lib/defaultComic';
+import { STARTER_VIDEOS } from './lib/defaultVideos';
+import { renderOffscreenPng } from './lib/cartoonRenderer';
 import {
   computeUpcomingBdSlots,
   DEFAULT_BD_SLOTS,
   formatBdTimeLabel,
-  getBdDateKey,
 } from './lib/scheduleHelper';
-import type { AutomationSettings, ComicItem, LayoutMode, VideoItem } from './types/comic';
+import type { RenderedVideoResult } from './lib/videoRenderer';
 import { RafuFolkLogo } from './components/RafuFolkLogo';
 import { StudioView } from './components/StudioView';
 import { VideoStudioView } from './components/VideoStudioView';
@@ -26,167 +30,170 @@ import { BrandingView } from './components/BrandingView';
 import { FacebookAutoView } from './components/FacebookAutoView';
 import { HistoryQueueView } from './components/HistoryQueueView';
 
-type NavTab = 'studio' | 'video' | 'branding' | 'automation' | 'history';
+type NavTab = 'video' | 'studio' | 'branding' | 'automation' | 'history';
 
+const STORAGE_COMICS_KEY = 'rafu_folk_comics_v1';
+const STORAGE_VIDEOS_KEY = 'rafu_folk_videos_v2';
 const STORAGE_SETTINGS_KEY = 'rafu_folk_settings_v2';
-const STORAGE_COMICS_KEY = 'rafu_folk_comics_v2';
-const STORAGE_VIDEOS_KEY = 'rafu_folk_videos_v1';
 
 const DEFAULT_SETTINGS: AutomationSettings = {
   logoText: '@@RAFU FOLK@@',
   logoPlacement: 'bottom-right',
   logoStyle: 'stamp-dark',
-  logoOpacity: 0.95,
+  logoOpacity: 0.94,
+  customLogoDataUrl: '',
   pageId: '',
   pageAccessToken: '',
   pageName: '',
   webhookUrl: '',
   autoPilotEnabled: false,
   intervalHours: 6,
-  randomJitterMinutes: 0,
+  randomJitterMinutes: 15,
   dailyCap: 3,
-  dailySlots: DEFAULT_BD_SLOTS,
+  dailySlots: [...DEFAULT_BD_SLOTS],
   timezone: 'Asia/Dhaka',
   useExactSlots: true,
   preferredCategory: 'auto',
   languageMode: 'bangla',
 };
 
-function loadSavedSettings(): AutomationSettings {
-  try {
-    const raw = localStorage.getItem(STORAGE_SETTINGS_KEY);
-    if (!raw) return DEFAULT_SETTINGS;
-    const parsed = JSON.parse(raw);
-    return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      dailySlots:
-        Array.isArray(parsed.dailySlots) && parsed.dailySlots.length > 0
-          ? parsed.dailySlots
-          : DEFAULT_BD_SLOTS,
-    };
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
-}
-
-function loadSavedComics(): ComicItem[] {
+function loadInitialComics(): ComicItem[] {
   try {
     const raw = localStorage.getItem(STORAGE_COMICS_KEY);
-    if (!raw) return STARTER_COMICS;
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : STARTER_COMICS;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
   } catch {
-    return STARTER_COMICS;
+    // Ignore storage read error
   }
+  return STARTER_COMICS;
 }
 
-function loadSavedVideos(): VideoItem[] {
+function loadInitialVideos(): VideoItem[] {
   try {
     const raw = localStorage.getItem(STORAGE_VIDEOS_KEY);
-    if (!raw) return STARTER_VIDEOS;
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : STARTER_VIDEOS;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
   } catch {
-    return STARTER_VIDEOS;
+    // Ignore storage read error
   }
+  return STARTER_VIDEOS;
 }
 
-async function renderOffscreenPng(
-  comic: ComicItem,
-  settings: AutomationSettings
-): Promise<string> {
-  if (document.fonts && document.fonts.ready) {
-    await document.fonts.ready;
+function loadInitialSettings(): AutomationSettings {
+  try {
+    const raw = localStorage.getItem(STORAGE_SETTINGS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        dailySlots:
+          Array.isArray(parsed?.dailySlots) && parsed.dailySlots.length > 0
+            ? parsed.dailySlots
+            : [...DEFAULT_BD_SLOTS],
+      };
+    }
+  } catch {
+    // Ignore storage read error
   }
-  const offscreen = document.createElement('canvas');
-  renderComicToCanvas(offscreen, comic, settings);
-  return offscreen.toDataURL('image/png');
+  return DEFAULT_SETTINGS;
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<NavTab>('studio');
-  const [settings, setSettings] = useState<AutomationSettings>(loadSavedSettings);
-  const [comics, setComics] = useState<ComicItem[]>(loadSavedComics);
+  const [activeTab, setActiveTab] = useState<NavTab>('video');
+  const [comics, setComics] = useState<ComicItem[]>(loadInitialComics);
   const [activeComicId, setActiveComicId] = useState<string>(
-    () => loadSavedComics()[0]?.id || STARTER_COMIC.id
+    () => loadInitialComics()[0]?.id || STARTER_COMICS[0].id
   );
-  const [videos, setVideos] = useState<VideoItem[]>(loadSavedVideos);
+  const [videos, setVideos] = useState<VideoItem[]>(loadInitialVideos);
   const [activeVideoId, setActiveVideoId] = useState<string>(
-    () => loadSavedVideos()[0]?.id || STARTER_VIDEO.id
+    () => loadInitialVideos()[0]?.id || STARTER_VIDEOS[0].id
   );
+  const [settings, setSettings] = useState<AutomationSettings>(loadInitialSettings);
   const [isGenerating, setIsGenerating] = useState(false);
   const [publishingId, setPublishingId] = useState<string | null>(null);
-  const [statusBanner, setStatusBanner] = useState<{
-    type: 'ok' | 'err';
-    text: string;
-  } | null>(null);
+  const [statusBanner, setStatusBanner] = useState<{ type: 'ok' | 'err'; text: string } | null>(
+    null
+  );
+  const [nextAutoRunAt, setNextAutoRunAt] = useState<string | null>(null);
   const [batchProgress, setBatchProgress] = useState<{
     current: number;
     total: number;
     label: string;
   } | null>(null);
-  const [batchBanner, setBatchBanner] = useState<{
-    type: 'ok' | 'err';
-    text: string;
-  } | null>(null);
-  const [nextAutoRunAt, setNextAutoRunAt] = useState<string | null>(null);
+  const [batchBanner, setBatchBanner] = useState<{ type: 'ok' | 'err'; text: string } | null>(
+    null
+  );
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const activeComic =
-    comics.find((c) => c.id === activeComicId) || comics[0] || STARTER_COMIC;
-  const activeVideo =
-    videos.find((v) => v.id === activeVideoId) || videos[0] || STARTER_VIDEO;
+  const activeComic = useMemo(
+    () => comics.find((c) => c.id === activeComicId) || comics[0],
+    [comics, activeComicId]
+  );
+
+  const activeVideo = useMemo(
+    () => videos.find((v) => v.id === activeVideoId) || videos[0],
+    [videos, activeVideoId]
+  );
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify(settings));
+      localStorage.setItem(STORAGE_COMICS_KEY, JSON.stringify(comics.slice(0, 40)));
     } catch {
-      // Ignore storage quota issues
-    }
-  }, [settings]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_COMICS_KEY, JSON.stringify(comics.slice(0, 50)));
-    } catch {
-      // Ignore storage quota issues
+      // Ignore quota exceeded
     }
   }, [comics]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_VIDEOS_KEY, JSON.stringify(videos.slice(0, 30)));
+      // Omit large base64 voiceClips when persisting metadata to localStorage
+      const lightweight = videos.slice(0, 12).map((v) => ({
+        ...v,
+        voiceClips: undefined,
+      }));
+      localStorage.setItem(STORAGE_VIDEOS_KEY, JSON.stringify(lightweight));
     } catch {
-      // Ignore storage quota issues
+      // Ignore quota exceeded
     }
   }, [videos]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify(settings));
+    } catch {
+      // Ignore quota exceeded
+    }
+  }, [settings]);
 
   const updateSettings = useCallback((patch: Partial<AutomationSettings>) => {
     setSettings((prev) => ({ ...prev, ...patch }));
   }, []);
 
   const updateComic = useCallback((updated: ComicItem) => {
-    setComics((prev) =>
-      prev.map((item) => (item.id === updated.id ? updated : item))
-    );
+    setComics((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
   }, []);
 
   const updateVideo = useCallback((updated: VideoItem) => {
-    setVideos((prev) =>
-      prev.map((item) => (item.id === updated.id ? updated : item))
-    );
+    setVideos((prev) => prev.map((v) => (v.id === updated.id ? updated : v)));
   }, []);
 
-  const todayAutoCount = comics.filter((c) => {
-    if (c.status !== 'published' || !c.publishedAt) return false;
-    return getBdDateKey(c.publishedAt) === getBdDateKey();
-  }).length;
+  const todayAutoCount = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return comics.filter(
+      (c) =>
+        (c.status === 'published' || c.status === 'scheduled') &&
+        (c.publishedAt || c.scheduledFor || '').startsWith(today)
+    ).length;
+  }, [comics]);
 
-  const publishedTotal = comics.filter((c) => c.status === 'published').length;
-  const queuedUnsentComics = comics.filter(
-    (c) => (c.status === 'scheduled' || c.status === 'draft') && !c.fbPostId
+  const queuedUnsentComics = useMemo(
+    () => comics.filter((c) => c.status === 'draft' || (c.status === 'scheduled' && !c.fbPostId)),
+    [comics]
   );
 
   const generateComicRequest = useCallback(
@@ -197,14 +204,14 @@ export default function App() {
         layout: 'auto' | LayoutMode;
         customHint: string;
       },
-      extraTitles: string[] = []
+      extraRecentTitles: string[] = []
     ): Promise<ComicItem> => {
       setIsGenerating(true);
       setStatusBanner(null);
       try {
         const recentTitles = [
-          ...extraTitles,
-          ...comics.slice(0, 14).map((c) => c.title),
+          ...extraRecentTitles,
+          ...comics.slice(0, 12).map((c) => c.title),
         ];
         const res = await fetch('/api/generate-comic', {
           method: 'POST',
@@ -216,7 +223,7 @@ export default function App() {
         });
         const data = await res.json();
         if (!res.ok) {
-          throw new Error(data.error || 'কার্টুন তৈরি করা যায়নি।');
+          throw new Error(data.error || 'কার্টুন জেনারেট করা যায়নি।');
         }
         const newItem: ComicItem = {
           ...data,
@@ -255,7 +262,6 @@ export default function App() {
           const scheduledPublishTime = scheduledDate
             ? Math.floor(scheduledDate.getTime() / 1000)
             : undefined;
-
           const res = await fetch('/api/facebook/publish', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -378,7 +384,10 @@ export default function App() {
       form.append('title', video.title);
       form.append('description', video.fbCaption);
       if (scheduledDate) {
-        form.append('scheduledPublishTime', String(Math.floor(scheduledDate.getTime() / 1000)));
+        form.append(
+          'scheduledPublishTime',
+          String(Math.floor(scheduledDate.getTime() / 1000))
+        );
       }
 
       const res = await fetch('/api/facebook/publish-video', {
@@ -520,9 +529,11 @@ export default function App() {
           total: targets.length,
           label: `শিডিউল হচ্ছে: ${item.title} (${formatBdTimeLabel(slotDate)})`,
         });
+
         await publishComicItem(item, slotDate);
         done += 1;
       }
+
       setBatchProgress({ current: targets.length, total: targets.length, label: 'সম্পন্ন!' });
       setBatchBanner({
         type: 'ok',
@@ -554,7 +565,7 @@ export default function App() {
     [activeComic.id, settings]
   );
 
-  // Compute next Bangladesh Time daily slot when live browser Auto-Pilot is active (0-min buffer so immediate slots aren't skipped)
+  // Compute next Bangladesh Time daily slot when live browser Auto-Pilot is active
   useEffect(() => {
     if (!settings.autoPilotEnabled) {
       setNextAutoRunAt(null);
@@ -574,7 +585,6 @@ export default function App() {
   // Background browser Auto-Pilot timer loop
   useEffect(() => {
     if (!settings.autoPilotEnabled || !nextAutoRunAt) return;
-
     const timer = setInterval(async () => {
       if (Date.now() < new Date(nextAutoRunAt).getTime()) return;
       const maxDaily = settings.dailySlots?.length || settings.dailyCap;
@@ -594,7 +604,6 @@ export default function App() {
       const [nextSlot] = computeUpcomingBdSlots(slots, 1, jitter, new Date(), 0);
       setNextAutoRunAt(nextSlot ? nextSlot.toISOString() : null);
     }, 15_000);
-
     return () => clearInterval(timer);
   }, [
     settings,
@@ -606,80 +615,66 @@ export default function App() {
   ]);
 
   const navItems: Array<{ id: NavTab; label: string; icon: typeof LayoutGrid }> = [
+    { id: 'video', label: 'AI ভিডিও স্টুডিও', icon: Film },
     { id: 'studio', label: 'কার্টুন স্টুডিও', icon: LayoutGrid },
-    { id: 'video', label: 'ভিডিও স্টুডিও', icon: Film },
     { id: 'branding', label: 'লোগো ব্র্যান্ডিং', icon: Stamp },
     { id: 'automation', label: 'Facebook অটো-পোস্ট', icon: Share2 },
     { id: 'history', label: 'হিস্ট্রি ও কিউ', icon: History },
   ];
 
   const pageTitleMap: Record<NavTab, string> = {
+    video: 'AI ভয়েস কার্টুন ও Reels স্টুডিও',
     studio: 'কার্টুন স্টুডিও',
-    video: '৫–১৫ সে. ভিডিও স্টুডিও',
     branding: 'লোগো ব্র্যান্ডিং',
     automation: 'Facebook অটো-পোস্ট',
     history: 'হিস্ট্রি ও কিউ',
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 lg:flex">
-      {/* Desktop Sidebar */}
-      <aside className="hidden w-64 shrink-0 flex-col justify-between border-r border-slate-200 bg-white p-5 lg:flex">
-        <div>
-          <div className="pb-6">
-            <RafuFolkLogo
-              text={settings.logoText || '@@RAFU FOLK@@'}
-              styleVariant={settings.logoStyle}
-              size="md"
-            />
-          </div>
-
-          <nav className="space-y-1" aria-label="Primary Navigation">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const active = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setActiveTab(item.id)}
-                  className={`flex w-full items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold transition-colors whitespace-nowrap ${
-                    active
-                      ? 'bg-slate-900 text-white'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                  }`}
-                >
-                  <Icon className="h-4 w-4 shrink-0" />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </nav>
+    <div className="flex min-h-screen bg-slate-50 text-slate-900">
+      {/* Left Sidebar Navigation */}
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-200 bg-white px-4 py-6 lg:flex">
+        <div className="px-2">
+          <RafuFolkLogo
+            text={settings.logoText || '@@RAFU FOLK@@'}
+            styleVariant={settings.logoStyle}
+            size="md"
+          />
         </div>
 
-        <div className="border-t border-slate-200 pt-4 text-xs text-slate-600 space-y-2">
+        <nav className="mt-8 flex-1 space-y-1">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setActiveTab(item.id)}
+                className={`flex w-full items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-semibold transition-colors whitespace-nowrap ${
+                  active
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="mt-6 border-t border-slate-100 pt-4 text-xs text-slate-500 space-y-1.5 px-2">
           <div className="flex items-center justify-between">
-            <span>BD শিডিউল স্লট</span>
-            <span className="font-mono-tabular font-semibold text-slate-900">
-              {(settings.dailySlots || DEFAULT_BD_SLOTS).length}টি/দিন
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>কিউ / শিডিউলড</span>
-            <span className="font-mono-tabular font-semibold text-slate-900">
-              {queuedUnsentComics.length}
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>মোট প্রকাশিত</span>
-            <span className="font-mono-tabular font-semibold text-slate-900">
-              {publishedTotal}
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>মোট কার্টুন</span>
+            <span>কার্টুন</span>
             <span className="font-mono-tabular font-semibold text-slate-900">
               {comics.length}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span>ভিডিও</span>
+            <span className="font-mono-tabular font-semibold text-slate-900">
+              {videos.length}
             </span>
           </div>
         </div>
@@ -765,26 +760,6 @@ export default function App() {
 
         {/* Viewport Content */}
         <main className="mx-auto w-full max-w-6xl flex-1 p-4 sm:p-8">
-          {activeTab === 'studio' && (
-            <StudioView
-              comic={activeComic}
-              settings={settings}
-              isGenerating={isGenerating}
-              isPublishing={publishingId === activeComic.id}
-              statusBanner={statusBanner}
-              onGenerateComic={async (opts) => {
-                await generateComicRequest(opts);
-              }}
-              onGenerateAndPublish={handleGenerateAndPublish}
-              onUpdateComic={updateComic}
-              onPublishCurrent={() => publishComicItem(activeComic)}
-              onDownloadCurrent={() => handleDownloadComic(activeComic)}
-              onCanvasReady={(el) => {
-                canvasRef.current = el;
-              }}
-            />
-          )}
-
           {activeTab === 'video' && (
             <VideoStudioView
               video={activeVideo}
@@ -802,6 +777,26 @@ export default function App() {
                 setActiveVideoId(newVid.id);
               }}
               onPublishVideo={publishVideoItem}
+            />
+          )}
+
+          {activeTab === 'studio' && (
+            <StudioView
+              comic={activeComic}
+              settings={settings}
+              isGenerating={isGenerating}
+              isPublishing={publishingId === activeComic.id}
+              statusBanner={statusBanner}
+              onGenerateComic={async (opts) => {
+                await generateComicRequest(opts);
+              }}
+              onGenerateAndPublish={handleGenerateAndPublish}
+              onUpdateComic={updateComic}
+              onPublishCurrent={() => publishComicItem(activeComic)}
+              onDownloadCurrent={() => handleDownloadComic(activeComic)}
+              onCanvasReady={(el) => {
+                canvasRef.current = el;
+              }}
             />
           )}
 

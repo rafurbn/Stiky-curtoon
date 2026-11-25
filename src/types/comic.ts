@@ -184,6 +184,24 @@ export type VideoSfx =
 
 export type VideoMusicStyle = 'comedy' | 'quirky' | 'dramatic' | 'none';
 
+export type VideoVoiceEngine = 'auto' | 'edge_tts' | 'gemini_tts' | 'none';
+
+export type VideoStoryArc = 'quick_short' | 'viral_story';
+
+export type VideoSubtitleStyle = 'reels_bold' | 'comic_bubble';
+
+export interface VideoVoiceClip {
+  sceneIndex: number;
+  charIndex: number;
+  characterId: CharacterId;
+  characterName: string;
+  text: string;
+  audioDataUrl: string;
+  durationSec: number;
+  offsetInSceneSec: number;
+  provider: 'edge_tts' | 'gemini_tts';
+}
+
 export interface VideoCharacterState {
   id: CharacterId;
   name: string;
@@ -215,6 +233,10 @@ export interface VideoScript {
   fbCaption: string;
   createdAt: string;
   seed: number;
+  voiceEngine?: VideoVoiceEngine;
+  storyArc?: VideoStoryArc;
+  subtitleStyle?: VideoSubtitleStyle;
+  voiceClips?: VideoVoiceClip[];
 }
 
 export interface VideoItem extends VideoScript {
@@ -224,4 +246,3 @@ export interface VideoItem extends VideoScript {
   fbPostId?: string;
   errorMessage?: string;
 }
-
