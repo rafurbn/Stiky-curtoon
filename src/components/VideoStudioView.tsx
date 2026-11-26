@@ -21,6 +21,9 @@ import {
 } from 'lucide-react';
 import type {
   AutomationSettings,
+  CharacterKind,
+  HybridAssetItem,
+  OutfitStyle,
   SavedRenderedVideo,
   VideoAction,
   VideoAspectRatio,
@@ -45,6 +48,11 @@ import {
   renderVideoFrame,
   type RenderedVideoResult,
 } from '../lib/videoRenderer';
+import {
+  getCachedAssetCatalog,
+  preloadScriptAssets,
+  refreshAssetCatalog,
+} from '../lib/hybridSpriteCatalog';
 import { startVideoAudioSession, type AudioSession } from '../lib/videoAudioEngine';
 import { prepareLipSyncForScript } from '../lib/lipSyncAnalyzer';
 import { getRenderedVideoBlobFromVault } from '../lib/videoStorage';
@@ -67,15 +75,31 @@ interface VideoStudioViewProps {
 }
 
 const THEME_OPTIONS: Array<{ value: VideoTheme; label: string }> = [
+  { value: 'clear_day_sky', label: 'পরিষ্কার আকাশ ও মাঠ (হাইব্রিড)' },
+  { value: 'village_road', label: 'গ্রামীণ মেঠো রাস্তা (হাইব্রিড)' },
+  { value: 'bazar_street', label: 'হাট-বাজার ও দোকান (হাইব্রিড)' },
+  { value: 'river_ghat', label: 'নদীর ঘাট ও নৌকা (হাইব্রিড)' },
+  { value: 'field_meadow', label: 'সবুজ খোলা মাঠ (হাইব্রিড)' },
+  { value: 'tea_stall_day', label: 'দিনের টং চা-স্টল (হাইব্রিড)' },
   { value: 'room_door', label: 'ঘরের দরজা ও করিডোর' },
   { value: 'bathroom_rush', label: 'বাথরুম ও টয়লেট' },
   { value: 'bedroom_night', label: 'রাতের রুম' },
   { value: 'exam_hall', label: 'পরীক্ষার হল' },
-  { value: 'tea_stall', label: 'চা-দোকান ও আড্ডা' },
+  { value: 'tea_stall', label: 'চা-দোকান (রঙিন)' },
   { value: 'office_drama', label: 'অফিস ও বস' },
   { value: 'rain_storm', label: 'বৃষ্টি ও বজ্রপাত' },
   { value: 'desert_sun', label: 'রোদ ও মরুভূমি' },
   { value: 'street_night', label: 'রাতের রাস্তা' },
+];
+
+const OUTFIT_OPTIONS: Array<{ value: OutfitStyle; label: string }> = [
+  { value: 'casual', label: 'সাধারণ টি-শার্ট' },
+  { value: 'lungi_panjabi', label: 'লুঙ্গি ও পাঞ্জাবি' },
+  { value: 'farmer', label: 'চাষী / গামছা' },
+  { value: 'office_suit', label: 'অফিস স্যুট ও টাই' },
+  { value: 'student', label: 'ছাত্র পোশাক' },
+  { value: 'shopkeeper', label: 'দোকানদার' },
+  { value: 'police', label: 'পুলিশ ইউনিফর্ম' },
 ];
 
 const CAMERA_OPTIONS: Array<{ value: VideoCamera; label: string }> = [
@@ -103,14 +127,16 @@ const SFX_OPTIONS: Array<{ value: VideoSfx; label: string }> = [
 ];
 
 const ACTION_OPTIONS: Array<{ value: VideoAction; label: string }> = [
+  { value: 'idle', label: 'দাঁড়িয়ে থাকা' },
+  { value: 'walk_in', label: 'হেঁটে আসা' },
+  { value: 'run', label: 'দৌড়ানো' },
+  { value: 'charge_butt', label: 'তেড়ে এসে গুতো' },
   { value: 'knock_door', label: 'দরজা ধাক্কানো' },
   { value: 'desperate_squeeze', label: 'চেপে ধরে কাঁপা' },
   { value: 'scream_jaw', label: 'মুখ খুলে চিৎকার' },
   { value: 'dramatic_closeup', label: 'হিরো/ভিলেন ক্লোজ-আপ' },
   { value: 'door_peek', label: 'দরজা খুলে উঁকি' },
   { value: 'collapsed_mess', label: 'মাটিতে বসে পড়া' },
-  { value: 'idle', label: 'দাঁড়িয়ে থাকা' },
-  { value: 'walk_in', label: 'হেঁটে আসা' },
   { value: 'laugh', label: 'হাসা' },
   { value: 'point_laugh', label: 'আঙুল তুলে হাসা' },
   { value: 'panting', label: 'হাঁপানো' },
@@ -118,7 +144,6 @@ const ACTION_OPTIONS: Array<{ value: VideoAction; label: string }> = [
   { value: 'eye_pop', label: 'চোখ বেরিয়ে আসা' },
   { value: 'facepalm', label: 'মাথায় হাত' },
   { value: 'hands_up', label: 'হাত তোলা' },
-  { value: 'run', label: 'দৌড়ানো' },
 ];
 
 const PROP_OPTIONS: Array<{ value: VideoProp; label: string }> = [
@@ -186,11 +211,34 @@ export function VideoStudioView({
     title: string;
   } | null>(null);
 
+  const [hybridAssets, setHybridAssets] = useState<HybridAssetItem[]>(() =>
+    getCachedAssetCatalog()
+  );
+  const [assetLoadTick, setAssetLoadTick] = useState(0);
+
   const totalDuration = video.scenes.reduce((acc, s) => acc + Math.max(1.5, s.durationSec), 0);
 
   useEffect(() => {
     preloadThemeBackgrounds().catch(() => {});
+    refreshAssetCatalog()
+      .then((list) => {
+        setHybridAssets(list);
+        setAssetLoadTick((t) => t + 1);
+      })
+      .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    preloadScriptAssets(video)
+      .then(() => {
+        if (active) setAssetLoadTick((t) => t + 1);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [video]);
 
   useEffect(() => {
     setAspectRatio(video.aspectRatio || '9:16');
@@ -217,7 +265,7 @@ export function VideoStudioView({
     };
   }, [stopPlayback]);
 
-  // Paint frame whenever elapsedSec or video changes while paused
+  // Paint frame whenever elapsedSec, video, or loaded hybrid assets change while paused
   useEffect(() => {
     if (isPlaying) return;
     const canvas = canvasRef.current;
@@ -229,7 +277,7 @@ export function VideoStudioView({
     if (ctx) {
       renderVideoFrame(ctx, video, settings, elapsedSec);
     }
-  }, [video, settings, elapsedSec, isPlaying]);
+  }, [video, settings, elapsedSec, isPlaying, assetLoadTick]);
 
   useEffect(() => {
     if (video.voiceClips && video.voiceClips.length > 0) {
@@ -405,6 +453,10 @@ export function VideoStudioView({
         status: 'draft',
         voiceEngine: 'auto',
       };
+      const freshAssets = await refreshAssetCatalog().catch(() => hybridAssets);
+      setHybridAssets(freshAssets);
+      await preloadScriptAssets(newVideo).catch(() => {});
+      setAssetLoadTick((t) => t + 1);
       onCreateVideo(newVideo);
 
       setStatusMsg({
@@ -955,10 +1007,13 @@ export function VideoStudioView({
                     {showAdvancedEditor && (
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                         <select
-                          value={sc.theme}
+                          value={sc.backgroundAssetId || sc.theme}
                           onChange={(e) => {
+                            const val = e.target.value as VideoTheme;
                             const next = video.scenes.map((item, i) =>
-                              i === sIdx ? { ...item, theme: e.target.value as VideoTheme } : item
+                              i === sIdx
+                                ? { ...item, theme: val, backgroundAssetId: val }
+                                : item
                             );
                             onUpdateVideo({ ...video, scenes: next });
                           }}
@@ -969,6 +1024,17 @@ export function VideoStudioView({
                               {o.label}
                             </option>
                           ))}
+                          {hybridAssets
+                            .filter(
+                              (a) =>
+                                a.category === 'background' &&
+                                !THEME_OPTIONS.some((t) => t.value === a.id)
+                            )
+                            .map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.name} ({a.source === 'ai_generated' ? 'AI' : 'কাস্টম'})
+                              </option>
+                            ))}
                         </select>
 
                         <select
@@ -1101,88 +1167,184 @@ export function VideoStudioView({
                             </div>
 
                             {showAdvancedEditor && (
-                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                                <select
-                                  value={ch.action}
-                                  onChange={(e) => {
-                                    const next = video.scenes.map((item, i) =>
-                                      i === sIdx
-                                        ? {
-                                            ...item,
-                                            characters: item.characters.map((cc, j) =>
-                                              j === cIdx
-                                                ? { ...cc, action: e.target.value as VideoAction }
-                                                : cc
-                                            ),
-                                          }
-                                        : item
-                                    );
-                                    onUpdateVideo({ ...video, scenes: next });
-                                  }}
-                                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                                >
-                                  {ACTION_OPTIONS.map((o) => (
-                                    <option key={o.value} value={o.value}>
-                                      {o.label}
-                                    </option>
-                                  ))}
-                                </select>
+                              <div className="space-y-2">
+                                <div className="grid grid-cols-2 gap-2">
+                                  <select
+                                    value={ch.kind || 'human_rig'}
+                                    onChange={(e) => {
+                                      const nextKind = e.target.value as CharacterKind;
+                                      const defaultSprite = hybridAssets.find(
+                                        (a) => a.category === 'sprite_actor'
+                                      )?.id;
+                                      const next = video.scenes.map((item, i) =>
+                                        i === sIdx
+                                          ? {
+                                              ...item,
+                                              characters: item.characters.map((cc, j) =>
+                                                j === cIdx
+                                                  ? {
+                                                      ...cc,
+                                                      kind: nextKind,
+                                                      spriteAssetId:
+                                                        nextKind === 'sprite_actor'
+                                                          ? cc.spriteAssetId || defaultSprite
+                                                          : undefined,
+                                                    }
+                                                  : cc
+                                              ),
+                                            }
+                                          : item
+                                      );
+                                      onUpdateVideo({ ...video, scenes: next });
+                                    }}
+                                    className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                                  >
+                                    <option value="human_rig">মানুষ (আর্টিকুলেটেড রিগ)</option>
+                                    <option value="sprite_actor">প্রাণী / গাড়ি (স্প্রাইট শিট)</option>
+                                  </select>
 
-                                <select
-                                  value={ch.prop}
-                                  onChange={(e) => {
-                                    const next = video.scenes.map((item, i) =>
-                                      i === sIdx
-                                        ? {
-                                            ...item,
-                                            characters: item.characters.map((cc, j) =>
-                                              j === cIdx
-                                                ? { ...cc, prop: e.target.value as VideoProp }
-                                                : cc
-                                            ),
-                                          }
-                                        : item
-                                    );
-                                    onUpdateVideo({ ...video, scenes: next });
-                                  }}
-                                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                                >
-                                  {PROP_OPTIONS.map((o) => (
-                                    <option key={o.value} value={o.value}>
-                                      {o.label}
-                                    </option>
-                                  ))}
-                                </select>
+                                  {ch.kind === 'sprite_actor' ? (
+                                    <select
+                                      value={ch.spriteAssetId || ''}
+                                      onChange={(e) => {
+                                        const spId = e.target.value;
+                                        const next = video.scenes.map((item, i) =>
+                                          i === sIdx
+                                            ? {
+                                                ...item,
+                                                characters: item.characters.map((cc, j) =>
+                                                  j === cIdx
+                                                    ? { ...cc, spriteAssetId: spId }
+                                                    : cc
+                                                ),
+                                              }
+                                            : item
+                                        );
+                                        onUpdateVideo({ ...video, scenes: next });
+                                      }}
+                                      className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                                    >
+                                      {hybridAssets
+                                        .filter((a) => a.category === 'sprite_actor')
+                                        .map((a) => (
+                                          <option key={a.id} value={a.id}>
+                                            {a.name}
+                                          </option>
+                                        ))}
+                                    </select>
+                                  ) : (
+                                    <select
+                                      value={ch.outfitStyle || 'casual'}
+                                      onChange={(e) => {
+                                        const outfit = e.target.value as OutfitStyle;
+                                        const next = video.scenes.map((item, i) =>
+                                          i === sIdx
+                                            ? {
+                                                ...item,
+                                                characters: item.characters.map((cc, j) =>
+                                                  j === cIdx
+                                                    ? { ...cc, outfitStyle: outfit }
+                                                    : cc
+                                                ),
+                                              }
+                                            : item
+                                        );
+                                        onUpdateVideo({ ...video, scenes: next });
+                                      }}
+                                      className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                                    >
+                                      {OUTFIT_OPTIONS.map((o) => (
+                                        <option key={o.value} value={o.value}>
+                                          {o.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  )}
+                                </div>
 
-                                <select
-                                  value={ch.voiceEffect || 'normal'}
-                                  onChange={(e) => {
-                                    const next = video.scenes.map((item, i) =>
-                                      i === sIdx
-                                        ? {
-                                            ...item,
-                                            characters: item.characters.map((cc, j) =>
-                                              j === cIdx
-                                                ? {
-                                                    ...cc,
-                                                    voiceEffect: e.target
-                                                      .value as VoiceEffectPreset,
-                                                  }
-                                                : cc
-                                            ),
-                                          }
-                                        : item
-                                    );
-                                    onUpdateVideo({ ...video, scenes: next });
-                                  }}
-                                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                                >
-                                  {VOICE_EFFECT_OPTIONS.map((o) => (
-                                    <option key={o.value} value={o.value}>
-                                      {o.label}
-                                    </option>
-                                  ))}
-                                </select>
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                  <select
+                                    value={ch.action}
+                                    onChange={(e) => {
+                                      const next = video.scenes.map((item, i) =>
+                                        i === sIdx
+                                          ? {
+                                              ...item,
+                                              characters: item.characters.map((cc, j) =>
+                                                j === cIdx
+                                                  ? { ...cc, action: e.target.value as VideoAction }
+                                                  : cc
+                                              ),
+                                            }
+                                          : item
+                                      );
+                                      onUpdateVideo({ ...video, scenes: next });
+                                    }}
+                                    className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                                  >
+                                    {ACTION_OPTIONS.map((o) => (
+                                      <option key={o.value} value={o.value}>
+                                        {o.label}
+                                      </option>
+                                    ))}
+                                  </select>
+
+                                  <select
+                                    value={ch.prop}
+                                    onChange={(e) => {
+                                      const next = video.scenes.map((item, i) =>
+                                        i === sIdx
+                                          ? {
+                                              ...item,
+                                              characters: item.characters.map((cc, j) =>
+                                                j === cIdx
+                                                  ? { ...cc, prop: e.target.value as VideoProp }
+                                                  : cc
+                                              ),
+                                            }
+                                          : item
+                                      );
+                                      onUpdateVideo({ ...video, scenes: next });
+                                    }}
+                                    className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                                  >
+                                    {PROP_OPTIONS.map((o) => (
+                                      <option key={o.value} value={o.value}>
+                                        {o.label}
+                                      </option>
+                                    ))}
+                                  </select>
+
+                                  <select
+                                    value={ch.voiceEffect || 'normal'}
+                                    onChange={(e) => {
+                                      const next = video.scenes.map((item, i) =>
+                                        i === sIdx
+                                          ? {
+                                              ...item,
+                                              characters: item.characters.map((cc, j) =>
+                                                j === cIdx
+                                                  ? {
+                                                      ...cc,
+                                                      voiceEffect: e.target
+                                                        .value as VoiceEffectPreset,
+                                                    }
+                                                  : cc
+                                              ),
+                                            }
+                                          : item
+                                      );
+                                      onUpdateVideo({ ...video, scenes: next });
+                                    }}
+                                    className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                                  >
+                                    {VOICE_EFFECT_OPTIONS.map((o) => (
+                                      <option key={o.value} value={o.value}>
+                                        {o.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
                               </div>
                             )}
 

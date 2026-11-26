@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 1280" width="720" height="1280">
+  <defs>
+    <linearGradient id="fsky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2563EB"/>
+      <stop offset="55%" stop-color="#60A5FA"/>
+      <stop offset="100%" stop-color="#DBEAFE"/>
+    </linearGradient>
+  </defs>
+  <rect width="720" height="922" fill="url(#fsky)"/>
+  <circle cx="150" cy="210" r="42" fill="#FEF08A"/>
+  <g fill="#FFFFFF" opacity="0.9">
+    <ellipse cx="420" cy="220" rx="75" ry="26"/>
+    <ellipse cx="475" cy="226" rx="45" ry="18"/>
+  </g>
+  <!-- Rolling Green Hills -->
+  <path d="M0 855 Q200 790 420 845 T720 830 L720 922 L0 922 Z" fill="#4ADE80"/>
+  <!-- Wooden Pasture Fence -->
+  <g fill="#B45309" stroke="#451A03" stroke-width="3">
+    <rect x="40" y="835" width="16" height="87"/>
+    <rect x="160" y="835" width="16" height="87"/>
+    <rect x="280" y="835" width="16" height="87"/>
+    <rect x="400" y="835" width="16" height="87"/>
+    <rect x="520" y="835" width="16" height="87"/>
+    <rect x="640" y="835" width="16" height="87"/>
+    <rect x="20" y="855" width="680" height="12"/>
+    <rect x="20" y="888" width="680" height="12"/>
+  </g>
+  <!-- Grass Field -->
+  <rect x="0" y="922" width="720" height="358" fill="#16A34A"/>
+  <path d="M0 922 L720 922 L720 960 L0 960 Z" fill="#22C55E"/>
+</svg>

@@ -1,6 +1,6 @@
 {
-  "name": "@@RAFU FOLK@@ Stick-Meme & Cartoon Studio",
-  "description": "100% Copyright-free Bengali Stick-Figure Meme & 2D AI Cartoon Reels generator with automatic dramatic voice dubbing, persistent MP4 saving, and Facebook auto-posting.",
+  "name": "@@RAFU FOLK@@ Hybrid Sprite & Cartoon Studio",
+  "description": "100% Copyright-free Bengali Hybrid Sprite & 2D AI Cartoon Studio with modular character rigs, animated sprite sheets, dynamic AI SVG fallback, Bengali TTS dubbing, and MP4 export.",
   "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

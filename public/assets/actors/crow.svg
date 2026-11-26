@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 260" width="1200" height="260">
+  <!-- Frame 0: Wings Up -->
+  <g transform="translate(0,0)">
+    <path d="M110 125 Q150 45 200 72 Q175 118 145 130 Z" fill="#1E293B"/>
+    <ellipse cx="145" cy="140" rx="46" ry="24" fill="#0F172A"/>
+    <polygon points="100,140 58,154 64,132" fill="#0F172A"/>
+    <circle cx="195" cy="128" r="18" fill="#0F172A"/>
+    <polygon points="210,124 238,130 210,136" fill="#F59E0B"/>
+    <circle cx="200" cy="124" r="4" fill="#FFFFFF"/>
+    <circle cx="201" cy="124" r="2" fill="#0F172A"/>
+  </g>
+  <!-- Frame 1: Wings Mid -->
+  <g transform="translate(300,0)">
+    <path d="M115 135 Q155 105 198 118 Q170 142 145 144 Z" fill="#1E293B"/>
+    <ellipse cx="145" cy="144" rx="46" ry="24" fill="#0F172A"/>
+    <polygon points="100,144 58,158 64,136" fill="#0F172A"/>
+    <circle cx="195" cy="132" r="18" fill="#0F172A"/>
+    <polygon points="210,128 238,134 210,140" fill="#F59E0B"/>
+    <circle cx="200" cy="128" r="4" fill="#FFFFFF"/>
+    <circle cx="201" cy="128" r="2" fill="#0F172A"/>
+  </g>
+  <!-- Frame 2: Wings Down -->
+  <g transform="translate(600,0)">
+    <ellipse cx="145" cy="136" rx="46" ry="24" fill="#0F172A"/>
+    <path d="M115 142 Q145 212 192 182 Q168 148 145 142 Z" fill="#1E293B"/>
+    <polygon points="100,136 58,150 64,128" fill="#0F172A"/>
+    <circle cx="195" cy="124" r="18" fill="#0F172A"/>
+    <polygon points="210,120 238,126 210,132" fill="#F59E0B"/>
+    <circle cx="200" cy="120" r="4" fill="#FFFFFF"/>
+    <circle cx="201" cy="120" r="2" fill="#0F172A"/>
+  </g>
+  <!-- Frame 3: Swoop -->
+  <g transform="translate(900,0)">
+    <path d="M110 120 Q150 55 195 84 Q170 120 145 130 Z" fill="#1E293B"/>
+    <ellipse cx="145" cy="138" rx="46" ry="24" fill="#0F172A"/>
+    <polygon points="100,138 58,152 64,130" fill="#0F172A"/>
+    <circle cx="195" cy="126" r="18" fill="#0F172A"/>
+    <polygon points="210,120 242,126 210,136" fill="#F59E0B"/>
+    <circle cx="200" cy="122" r="4" fill="#FFFFFF"/>
+    <circle cx="201" cy="122" r="2" fill="#0F172A"/>
+  </g>
+</svg>

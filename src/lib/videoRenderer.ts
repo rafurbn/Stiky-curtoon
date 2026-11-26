@@ -19,8 +19,19 @@ import {
   drawAnimatedMouth,
   drawArticulatedRigCharacter,
   drawSceneVisualEffects,
+  drawSpriteSheetActor,
   interpolateCharacterKeyframes,
 } from './keyframeRigRenderer';
+import {
+  BUILTIN_HYBRID_ASSETS,
+  findAssetByIdOrTheme,
+  getLoadedImageSync,
+  getLoadedInlineSvgSync,
+  loadImageFromUrl,
+  preloadScriptAssets,
+  refreshAssetCatalog,
+  resolveSpriteAssetForCharacter,
+} from './hybridSpriteCatalog';
 
 export interface RenderedVideoResult {
   blob: Blob;
@@ -39,8 +50,9 @@ export function getVideoDimensions(aspectRatio: VideoAspectRatio): {
   return { width: 720, height: 1280 };
 }
 
-export function preloadThemeBackgrounds(): Promise<void> {
-  return Promise.resolve();
+export async function preloadThemeBackgrounds(): Promise<void> {
+  await refreshAssetCatalog();
+  await Promise.all(BUILTIN_HYBRID_ASSETS.map((a) => loadImageFromUrl(a.url)));
 }
 
 function easeInOutCubic(x: number): number {
@@ -856,36 +868,78 @@ function drawStickMemeCharacter(
  * 2. 2D COLORED CARTOON RENDERER (Procedural Vibrant Backdrops + Colored Characters)
  * ========================================================================== */
 
+function drawHybridBackgroundImage(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  w: number,
+  h: number,
+  groundY: number
+) {
+  const iw = img.naturalWidth;
+  const ih = img.naturalHeight;
+  if (iw <= 0 || ih <= 0) return;
+
+  // Builtin SVGs are authored with horizon at 72% height; preserve horizon alignment in 9:16 and 1:1
+  if (Math.abs(iw / ih - w / h) < 0.08) {
+    ctx.drawImage(img, 0, 0, w, h);
+    return;
+  }
+  const srcHorizon = Math.round(ih * 0.72);
+  ctx.drawImage(img, 0, 0, iw, srcHorizon, 0, 0, w, groundY);
+  ctx.drawImage(img, 0, srcHorizon, iw, ih - srcHorizon, 0, groundY, w, h - groundY);
+}
+
 function drawColoredCartoonBackground(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
-  theme: VideoTheme,
+  scene: VideoScene,
   globalT: number,
   groundY: number
 ) {
+  const bgImg =
+    getLoadedInlineSvgSync(scene.backgroundInlineSvg) ||
+    getLoadedImageSync(findAssetByIdOrTheme(scene.backgroundAssetId)?.url) ||
+    getLoadedImageSync(findAssetByIdOrTheme(scene.theme)?.url);
+
+  if (bgImg) {
+    drawHybridBackgroundImage(ctx, bgImg, w, h, groundY);
+    return;
+  }
+
+  const theme = scene.theme;
   const grad = ctx.createLinearGradient(0, 0, 0, groundY);
+  let groundColor = '#1E293B';
+
   if (theme === 'rain_storm') {
     grad.addColorStop(0, '#0F172A');
     grad.addColorStop(1, '#334155');
   } else if (theme === 'desert_sun') {
     grad.addColorStop(0, '#EA580C');
     grad.addColorStop(1, '#FDE047');
-  } else if (theme === 'office_drama') {
+    groundColor = '#D97706';
+  } else if (theme === 'office_drama' || theme === 'exam_hall' || theme === 'room_door' || theme === 'bathroom_rush') {
     grad.addColorStop(0, '#E2E8F0');
     grad.addColorStop(1, '#CBD5E1');
-  } else if (theme === 'tea_stall') {
-    grad.addColorStop(0, '#431407');
-    grad.addColorStop(1, '#D97706');
-  } else {
+    groundColor = '#64748B';
+  } else if (theme === 'tea_stall' || theme === 'tea_stall_day') {
+    grad.addColorStop(0, '#38BDF8');
+    grad.addColorStop(1, '#FDE68A');
+    groundColor = '#475569';
+  } else if (theme === 'street_night' || theme === 'bedroom_night') {
     grad.addColorStop(0, '#0F172A');
     grad.addColorStop(1, '#1E293B');
+  } else {
+    // Daylight default fallback (never black void!)
+    grad.addColorStop(0, '#38BDF8');
+    grad.addColorStop(1, '#E0F2FE');
+    groundColor = '#22C55E';
   }
 
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, groundY);
 
-  ctx.fillStyle = '#1E293B';
+  ctx.fillStyle = groundColor;
   ctx.fillRect(0, groundY, w, h - groundY);
 
   if (theme === 'rain_storm') {
@@ -908,7 +962,7 @@ function drawColoredCartoonBackground(
     ctx.arc(w * 0.78, h * 0.22, 54, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
-  } else if (theme === 'tea_stall') {
+  } else if (theme === 'tea_stall' || theme === 'tea_stall_day') {
     ctx.save();
     ctx.fillStyle = '#78350F';
     ctx.fillRect(w * 0.08, groundY - 90, w * 0.84, 90);
@@ -1057,7 +1111,7 @@ export function renderVideoFrame(
       groundY
     );
   } else {
-    drawColoredCartoonBackground(ctx, w, h, scene.theme, elapsedSec, groundY);
+    drawColoredCartoonBackground(ctx, w, h, scene, elapsedSec, groundY);
   }
 
   // Active speaker tracking
@@ -1082,7 +1136,9 @@ export function renderVideoFrame(
     });
   }
 
-  // Render characters (AI articulated keyframe puppet rig if present, else legacy pose fallback)
+  // Render characters (Hybrid Sprite Actors for animals/vehicles + Modular Part-Based Rig for talking humans)
+  const resolvedCharacterPositions: Array<{ xNorm: number; yPx: number }> = [];
+
   scene.characters.forEach((char, idx) => {
     let defaultXNorm = 0.5;
     let defaultFacing: 1 | -1 = 1;
@@ -1101,10 +1157,60 @@ export function renderVideoFrame(
 
     const isSpeaking = activeSpeaker?.charIndex === idx;
     const lip = sampleCharacterLipSync(script, sceneIndex, idx, localT, isSpeaking);
-    const rigPose =
+    let rigPose =
       char.action !== 'dramatic_closeup'
         ? interpolateCharacterKeyframes(char, tNorm, defaultXNorm, defaultFacing)
         : null;
+
+    // Keep speaking character visible on stage unless rolling offscreen
+    if (rigPose && isSpeaking && rigPose.curlBall < 0.5 && (rigPose.x < 0.1 || rigPose.x > 0.9)) {
+      rigPose = { ...rigPose, x: Math.max(0.14, Math.min(0.86, rigPose.x)) };
+    }
+
+    const effectiveXNorm = rigPose ? rigPose.x : defaultXNorm;
+    const effectiveYPx = rigPose ? groundY - Math.max(0, rigPose.y) * (h * 0.42) : groundY;
+    resolvedCharacterPositions.push({ xNorm: effectiveXNorm, yPx: effectiveYPx });
+
+    const spriteAsset = resolveSpriteAssetForCharacter(char);
+    const isSpriteActor =
+      char.kind === 'sprite_actor' || Boolean(spriteAsset) || Boolean(char.inlineSvg);
+
+    if (isSpriteActor) {
+      const spriteImg =
+        getLoadedInlineSvgSync(char.inlineSvg) ||
+        getLoadedImageSync(spriteAsset?.url);
+      const effectivePose = rigPose ?? {
+        x: defaultXNorm,
+        y: 0,
+        facing: defaultFacing,
+        rotationDeg: 0,
+        curlBall: 0,
+        torsoLeanDeg: 0,
+        headTiltDeg: 0,
+        leftArm: { shoulder: 0, elbow: 0 },
+        rightArm: { shoulder: 0, elbow: 0 },
+        leftLeg: { hip: 0, knee: 0 },
+        rightLeg: { hip: 0, knee: 0 },
+        vibrate: 0,
+        scale: 1,
+        heldProp: 'none' as const,
+        expression: char.expression,
+      };
+      drawSpriteSheetActor(
+        ctx,
+        char,
+        spriteAsset,
+        spriteImg,
+        effectivePose,
+        w,
+        groundY,
+        h,
+        elapsedSec,
+        tNorm,
+        scene.splitScreen ? 0.9 : 1.05
+      );
+      return;
+    }
 
     if (rigPose) {
       drawArticulatedRigCharacter(
@@ -1147,8 +1253,8 @@ export function renderVideoFrame(
     }
   });
 
-  // Render scene visual effects (impact stars, tickle sparks, speed lines, dust puffs, laugh bursts)
-  drawSceneVisualEffects(ctx, scene.effects, w, h, tNorm, isStick);
+  // Render scene visual effects anchored to target characters
+  drawSceneVisualEffects(ctx, scene.effects, w, h, tNorm, isStick, resolvedCharacterPositions);
 
   ctx.restore();
 
@@ -1183,13 +1289,23 @@ export function renderVideoFrame(
     ctx.restore();
   }
 
-  // Subtle scene top label below hook
+  // Subtle scene top label below hook (with crisp high-contrast pill for bright skies)
   if (scene.captionTop) {
     ctx.save();
     ctx.font = '600 18px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillStyle = isStick ? 'rgba(17, 24, 39, 0.55)' : 'rgba(255, 255, 255, 0.75)';
-    ctx.fillText(scene.captionTop, w / 2, 124);
+    ctx.textBaseline = 'middle';
+    if (!isStick) {
+      const capW = Math.min(w - 64, ctx.measureText(scene.captionTop).width + 32);
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.68)';
+      drawRoundedRect(ctx, (w - capW) / 2, 108, capW, 32, 999);
+      ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(scene.captionTop, w / 2, 124);
+    } else {
+      ctx.fillStyle = 'rgba(17, 24, 39, 0.65)';
+      ctx.fillText(scene.captionTop, w / 2, 124);
+    }
     ctx.restore();
   }
 
@@ -1201,6 +1317,11 @@ export function renderVideoFrame(
     ctx.font = '700 22px "Plus Jakarta Sans", sans-serif';
     ctx.textAlign = 'center';
     ctx.fillStyle = isStick ? '#64748B' : '#FFFFFF';
+    if (!isStick) {
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.65)';
+      ctx.lineWidth = 4;
+      ctx.strokeText(brandText, w / 2, groundY + 46);
+    }
     ctx.fillText(brandText, w / 2, groundY + 46);
     ctx.restore();
   }
@@ -1269,7 +1390,10 @@ export async function recordVideoFromScript(
     throw new Error('Canvas 2D context unavailable.');
   }
 
-  await prepareLipSyncForScript(script);
+  await Promise.all([
+    prepareLipSyncForScript(script),
+    preloadScriptAssets(script),
+  ]);
 
   const totalSec = script.scenes.reduce(
     (sum, s) => sum + Math.max(1.5, s.durationSec),

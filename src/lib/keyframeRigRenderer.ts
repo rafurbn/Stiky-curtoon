@@ -3,6 +3,7 @@ import type {
   CharacterKeyframe,
   ExpressionType,
   HeldPropType,
+  HybridAssetItem,
   SceneVisualEffect,
   VideoCharacterState,
 } from '../types/comic';
@@ -24,6 +25,7 @@ export interface InterpolatedPose {
   scale: number;
   heldProp: HeldPropType;
   expression: ExpressionType | 'exhausted';
+  spriteFrame?: number;
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -171,14 +173,22 @@ export function interpolateCharacterKeyframes(
   const propB = b.heldProp ?? propA;
   const activeProp = alpha < 0.5 ? propA : propB;
 
+  // Physics guardrail: prevent characters from sinking beneath the floor line
+  const rawY = lerp(a.y ?? 0, b.y ?? 0, alpha);
+  const clampedY = Math.max(-0.02, Math.min(0.65, rawY));
+  const rawScale = lerp(a.scale ?? 1, b.scale ?? 1, alpha);
+  const clampedScale = Math.max(0.65, Math.min(1.45, rawScale));
+  const activeSpriteFrame =
+    alpha < 0.5 ? a.spriteFrame : (b.spriteFrame ?? a.spriteFrame);
+
   return {
     x: lerp(a.x ?? defaultX, b.x ?? defaultX, alpha),
-    y: lerp(a.y ?? 0, b.y ?? 0, alpha),
+    y: clampedY,
     facing: activeFacing,
     rotationDeg: lerp(a.rotationDeg ?? 0, b.rotationDeg ?? a.rotationDeg ?? 0, alpha),
     curlBall: lerp(a.curlBall ?? 0, b.curlBall ?? a.curlBall ?? 0, alpha),
-    torsoLeanDeg: lerp(a.torsoLeanDeg ?? 0, b.torsoLeanDeg ?? a.torsoLeanDeg ?? 0, alpha),
-    headTiltDeg: lerp(a.headTiltDeg ?? 0, b.headTiltDeg ?? a.headTiltDeg ?? 0, alpha),
+    torsoLeanDeg: Math.max(-48, Math.min(48, lerp(a.torsoLeanDeg ?? 0, b.torsoLeanDeg ?? a.torsoLeanDeg ?? 0, alpha))),
+    headTiltDeg: Math.max(-35, Math.min(35, lerp(a.headTiltDeg ?? 0, b.headTiltDeg ?? a.headTiltDeg ?? 0, alpha))),
     leftArm: {
       shoulder: lerp(a.leftArmDeg?.shoulder ?? -16, b.leftArmDeg?.shoulder ?? -16, alpha),
       elbow: lerp(a.leftArmDeg?.elbow ?? 12, b.leftArmDeg?.elbow ?? 12, alpha),
@@ -195,10 +205,11 @@ export function interpolateCharacterKeyframes(
       hip: lerp(a.rightLegDeg?.hip ?? 10, b.rightLegDeg?.hip ?? 10, alpha),
       knee: lerp(a.rightLegDeg?.knee ?? 0, b.rightLegDeg?.knee ?? 0, alpha),
     },
-    vibrate: lerp(a.vibrate ?? 0, b.vibrate ?? a.vibrate ?? 0, alpha),
-    scale: lerp(a.scale ?? 1, b.scale ?? 1, alpha),
+    vibrate: Math.max(0, Math.min(1, lerp(a.vibrate ?? 0, b.vibrate ?? a.vibrate ?? 0, alpha))),
+    scale: clampedScale,
     heldProp: activeProp,
     expression: activeExp,
+    spriteFrame: activeSpriteFrame,
   };
 }
 
@@ -339,6 +350,111 @@ function drawHeldPropAtHand(
   ctx.restore();
 }
 
+export function drawSpriteSheetActor(
+  ctx: CanvasRenderingContext2D,
+  char: VideoCharacterState,
+  asset: HybridAssetItem | undefined,
+  img: HTMLImageElement | null,
+  pose: InterpolatedPose,
+  w: number,
+  groundY: number,
+  h: number,
+  globalT: number,
+  tNorm: number,
+  baseScale = 1
+) {
+  const dir = pose.facing;
+  const vibAmp = pose.vibrate * 5.5;
+  const vibX = vibAmp > 0.1 ? Math.sin(globalT * 52) * vibAmp : 0;
+  const vibY = vibAmp > 0.1 ? Math.cos(globalT * 46) * (vibAmp * 0.7) : 0;
+
+  const worldX = pose.x * w + vibX;
+  const worldY = Math.min(groundY, groundY - Math.max(0, pose.y) * (h * 0.42)) + vibY;
+  const totalScale = baseScale * pose.scale;
+
+  const cols = Math.max(1, asset?.cols || 1);
+  const rows = Math.max(1, asset?.rows || 1);
+  const frameCount = Math.max(1, asset?.frameCount || cols * rows);
+  const fps = Math.max(2, asset?.fps || 6);
+
+  // Pick sprite frame intelligently from action/motion or explicit spriteFrame
+  let frameIdx = 0;
+  if (typeof pose.spriteFrame === 'number' && Number.isFinite(pose.spriteFrame)) {
+    frameIdx = Math.abs(Math.floor(pose.spriteFrame)) % frameCount;
+  } else if (
+    (char.action === 'charge_butt' || char.action === 'shocked_jump' || pose.torsoLeanDeg > 16) &&
+    frameCount >= 4 &&
+    tNorm > 0.35
+  ) {
+    // Frame 3 is action/headbutt/charge pose in 4-frame sprite sheets
+    frameIdx = frameCount - 1;
+  } else if (char.action === 'walk_in' || char.action === 'run' || Math.abs(pose.leftLeg.hip) > 12) {
+    if (frameCount >= 3) {
+      // Alternate frames 1 & 2 for smooth walk stride
+      const step = Math.floor(globalT * fps) % 2;
+      frameIdx = 1 + step;
+    } else {
+      frameIdx = Math.floor(globalT * fps) % frameCount;
+    }
+  } else {
+    frameIdx = Math.floor(globalT * Math.min(4, fps)) % Math.min(2, frameCount);
+  }
+
+  ctx.save();
+  // Ground contact shadow
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
+  ctx.beginPath();
+  ctx.ellipse(worldX, groundY + 4, 72 * totalScale, 12 * totalScale, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const drawW = 240 * totalScale;
+  const drawH = 208 * totalScale;
+  // Subtle walk bounce when moving
+  const walkBounce =
+    char.action === 'walk_in' || char.action === 'run' || char.action === 'charge_butt'
+      ? Math.abs(Math.sin(globalT * 10)) * 6
+      : 0;
+
+  ctx.translate(worldX, worldY - drawH / 2 - walkBounce);
+  ctx.rotate((pose.rotationDeg * Math.PI) / 180);
+  ctx.scale(dir, 1);
+
+  if (img && img.complete && img.naturalWidth > 0) {
+    const cellW = img.naturalWidth / cols;
+    const cellH = img.naturalHeight / rows;
+    const col = frameIdx % cols;
+    const row = Math.floor(frameIdx / cols) % rows;
+    ctx.drawImage(
+      img,
+      col * cellW,
+      row * cellH,
+      cellW,
+      cellH,
+      -drawW / 2,
+      -drawH / 2 + 12 * totalScale,
+      drawW,
+      drawH
+    );
+  } else {
+    // Clean labeled fallback badge while image finishes loading
+    ctx.fillStyle = '#FFFFFF';
+    ctx.strokeStyle = '#1E293B';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.roundRect(-80, -70, 160, 110, 22);
+    ctx.fill();
+    ctx.stroke();
+    ctx.scale(dir, 1);
+    ctx.fillStyle = '#0F172A';
+    ctx.font = '700 22px "Hind Siliguri", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(char.name || 'চরিত্র', 0, -14);
+  }
+
+  ctx.restore();
+}
+
 export function drawArticulatedRigCharacter(
   ctx: CanvasRenderingContext2D,
   char: VideoCharacterState,
@@ -357,12 +473,21 @@ export function drawArticulatedRigCharacter(
   const vibY = vibAmp > 0.1 ? Math.cos(globalT * 46) * (vibAmp * 0.7) : 0;
 
   const worldX = pose.x * w + vibX;
-  const worldY = groundY - pose.y * (h * 0.42) + vibY;
+  // Clamp vertical anchor so fallen/crouched poses sit ON groundY instead of slicing beneath the floor
+  const safeGroundOffset = Math.max(0, pose.y) * (h * 0.42);
+  const crouchDrop = pose.y < 0 ? Math.min(26, Math.abs(pose.y) * 180) : 0;
+  const worldY = groundY - safeGroundOffset + vibY;
   const totalScale = baseScale * pose.scale;
 
   ctx.save();
+  // Ground shadow
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.16)';
+  ctx.beginPath();
+  ctx.ellipse(worldX, groundY + 4, 42 * totalScale, 9 * totalScale, 0, 0, Math.PI * 2);
+  ctx.fill();
+
   const pivotHeight = 108 * totalScale;
-  ctx.translate(worldX, worldY - pivotHeight);
+  ctx.translate(worldX, worldY - pivotHeight + crouchDrop * 0.35);
   ctx.rotate((pose.rotationDeg * Math.PI) / 180);
   ctx.scale(totalScale, totalScale);
 
@@ -528,13 +653,27 @@ export function drawArticulatedRigCharacter(
   const frontArmGeom = computeArmEnd(pose.rightArm.shoulder, pose.rightArm.elbow, 10 * dir);
   const vibHands = pose.vibrate > 0.35;
 
+  const outfit = char.outfitStyle || 'casual';
+  const shirtColor =
+    outfit === 'lungi_panjabi'
+      ? '#F8FAFC'
+      : outfit === 'farmer'
+        ? '#FEF3C7'
+        : outfit === 'office_suit'
+          ? '#1E293B'
+          : outfit === 'police'
+            ? '#0284C7'
+            : outfit === 'shopkeeper'
+              ? '#059669'
+              : look.shirt;
+
   drawLeg(pose.leftLeg.hip, pose.leftLeg.knee, true);
   drawArm(backArmGeom, vibHands, 'none');
 
   ctx.save();
   ctx.translate((hipX + shoulderX) / 2, (hipY + shoulderY) / 2);
   ctx.rotate(dir * leanRad);
-  ctx.fillStyle = isStick ? '#FFFFFF' : look.shirt;
+  ctx.fillStyle = isStick ? '#FFFFFF' : shirtColor;
   ctx.strokeStyle = '#111827';
   ctx.lineWidth = 4.2;
   ctx.beginPath();
@@ -545,6 +684,50 @@ export function drawArticulatedRigCharacter(
   }
   ctx.fill();
   ctx.stroke();
+
+  if (!isStick) {
+    if (outfit === 'lungi_panjabi') {
+      // Checkered lungi skirt wrap at hip + panjabi collar
+      ctx.fillStyle = '#0F766E';
+      ctx.beginPath();
+      ctx.roundRect(-26, 18, 52, 34, 6);
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = '#5EEAD4';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-24, 34);
+      ctx.lineTo(24, 34);
+      ctx.stroke();
+    } else if (outfit === 'farmer') {
+      // Red/white Bangladeshi gamcha draped over shoulder
+      ctx.fillStyle = '#DC2626';
+      ctx.strokeStyle = '#111827';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.roundRect(-14 * dir - 6, -42, 16, 62, 5);
+      ctx.fill();
+      ctx.stroke();
+    } else if (outfit === 'office_suit') {
+      // Tie & white collar
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.moveTo(-10, -40);
+      ctx.lineTo(10, -40);
+      ctx.lineTo(0, -24);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#EF4444';
+      ctx.beginPath();
+      ctx.moveTo(-4, -36);
+      ctx.lineTo(4, -36);
+      ctx.lineTo(6, -6);
+      ctx.lineTo(0, 4);
+      ctx.lineTo(-6, -6);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
   ctx.restore();
 
   drawLeg(pose.rightLeg.hip, pose.rightLeg.knee, false);
@@ -572,6 +755,13 @@ export function drawArticulatedRigCharacter(
     ctx.arc(0, -14, 37, Math.PI * 1.05, Math.PI * 1.95);
     ctx.fill();
     ctx.stroke();
+    if (outfit === 'police') {
+      ctx.fillStyle = '#1E3A8A';
+      ctx.beginPath();
+      ctx.roundRect(-34, -46, 68, 20, 6);
+      ctx.fill();
+      ctx.stroke();
+    }
   }
 
   ctx.fillStyle = isStick ? '#FFFFFF' : look.skin;
@@ -640,7 +830,8 @@ export function drawSceneVisualEffects(
   w: number,
   h: number,
   tNorm: number,
-  isStick: boolean
+  isStick: boolean,
+  resolvedCharacters: Array<{ xNorm: number; yPx: number }> = []
 ) {
   if (!Array.isArray(effects) || effects.length === 0) return;
 
@@ -651,8 +842,32 @@ export function drawSceneVisualEffects(
 
     const p = (tNorm - start) / dur;
     const alpha = p < 0.2 ? p / 0.2 : Math.max(0, 1 - (p - 0.2) / 0.8);
-    const cx = fx.x * w;
-    const cy = fx.y * h;
+
+    let cx = fx.x * w;
+    let cy = fx.y * h;
+
+    // Anchor FX directly onto target character (prevents effects floating in empty sky)
+    if (
+      typeof fx.targetCharIndex === 'number' &&
+      resolvedCharacters[fx.targetCharIndex]
+    ) {
+      const target = resolvedCharacters[fx.targetCharIndex];
+      cx = target.xNorm * w;
+      cy = target.yPx - 120;
+    } else if (resolvedCharacters.length > 0 && fx.y < 0.34) {
+      // Auto-snap stray sky-high impact stars/sparks onto nearest character torso
+      let best = resolvedCharacters[0];
+      let bestDist = Math.abs(best.xNorm - fx.x);
+      for (const rc of resolvedCharacters) {
+        const d = Math.abs(rc.xNorm - fx.x);
+        if (d < bestDist) {
+          bestDist = d;
+          best = rc;
+        }
+      }
+      cx = best.xNorm * w;
+      cy = best.yPx - 120;
+    }
 
     ctx.save();
     ctx.globalAlpha = alpha;

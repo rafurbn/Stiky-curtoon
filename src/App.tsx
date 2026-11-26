@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Archive,
   Film,
+  Layers,
   LayoutGrid,
   Palette,
   Share2,
@@ -34,11 +35,12 @@ import {
 import { RafuFolkLogo } from './components/RafuFolkLogo';
 import { StudioView } from './components/StudioView';
 import { VideoStudioView } from './components/VideoStudioView';
+import { AssetLibraryView } from './components/AssetLibraryView';
 import { BrandingView } from './components/BrandingView';
 import { FacebookAutoView } from './components/FacebookAutoView';
 import { HistoryQueueView } from './components/HistoryQueueView';
 
-type AppTab = 'video' | 'studio' | 'history' | 'branding' | 'automation';
+type AppTab = 'video' | 'assets' | 'studio' | 'history' | 'branding' | 'automation';
 
 const SETTINGS_KEY = 'rafu_folk_settings_v2';
 const COMICS_KEY = 'rafu_folk_comics_v2';
@@ -509,6 +511,7 @@ export default function App() {
 
   const navItems: Array<{ id: AppTab; label: string; icon: typeof Film }> = [
     { id: 'video', label: 'ভিডিও স্টুডিও', icon: Film },
+    { id: 'assets', label: 'অ্যাসেট ও স্প্রাইট', icon: Layers },
     { id: 'history', label: 'সেইভ করা ভিডিও', icon: Archive },
     { id: 'studio', label: 'কমিক ছবি', icon: LayoutGrid },
     { id: 'branding', label: 'লোগো ও ব্র্যান্ডিং', icon: Palette },
@@ -650,6 +653,8 @@ export default function App() {
               onPublishVideo={publishVideoItem}
             />
           )}
+
+          {activeTab === 'assets' && <AssetLibraryView />}
 
           {activeTab === 'history' && (
             <HistoryQueueView

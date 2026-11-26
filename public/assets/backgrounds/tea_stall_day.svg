@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 1280" width="720" height="1280">
+  <defs>
+    <linearGradient id="tsky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0EA5E9"/>
+      <stop offset="100%" stop-color="#E0F2FE"/>
+    </linearGradient>
+  </defs>
+  <rect width="720" height="922" fill="url(#tsky)"/>
+  <path d="M0 845 Q360 800 720 845 L720 922 L0 922 Z" fill="#4ADE80"/>
+  <!-- Tin-shed Tong Tea Stall -->
+  <rect x="95" y="640" width="530" height="282" fill="#FEF3C7" stroke="#1E293B" stroke-width="4"/>
+  <polygon points="65,645 655,645 615,575 105,575" fill="#64748B" stroke="#1E293B" stroke-width="4"/>
+  <rect x="135" y="795" width="450" height="127" fill="#92400E" stroke="#1E293B" stroke-width="4"/>
+  <!-- Kettle & Jars -->
+  <circle cx="240" cy="770" r="24" fill="#CBD5E1" stroke="#1E293B" stroke-width="3"/>
+  <rect x="460" y="745" width="32" height="50" rx="6" fill="#FDE047" stroke="#1E293B" stroke-width="3"/>
+  <rect x="510" y="745" width="32" height="50" rx="6" fill="#FCA5A5" stroke="#1E293B" stroke-width="3"/>
+  <rect x="260" y="592" width="200" height="40" rx="6" fill="#FACC15" stroke="#1E293B" stroke-width="3"/>
+  <text x="360" y="620" text-anchor="middle" font-family="sans-serif" font-weight="800" font-size="22" fill="#1E293B">মামার চা-স্টল</text>
+  <!-- Ground -->
+  <rect x="0" y="922" width="720" height="358" fill="#64748B"/>
+  <rect x="0" y="922" width="720" height="32" fill="#475569"/>
+</svg>

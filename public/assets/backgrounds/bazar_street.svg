@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 1280" width="720" height="1280">
+  <defs>
+    <linearGradient id="bsky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#FEF3C7"/>
+    </linearGradient>
+  </defs>
+  <rect width="720" height="922" fill="url(#bsky)"/>
+  <!-- Market Stalls Left -->
+  <rect x="28" y="690" width="210" height="232" fill="#FDE68A" stroke="#1E293B" stroke-width="4"/>
+  <polygon points="16,690 250,690 236,625 30,625" fill="#EF4444" stroke="#1E293B" stroke-width="4"/>
+  <rect x="52" y="645" width="44" height="45" fill="#FFFFFF"/>
+  <rect x="142" y="645" width="44" height="45" fill="#FFFFFF"/>
+  <rect x="52" y="795" width="162" height="26" fill="#92400E" stroke="#1E293B" stroke-width="3"/>
+  <!-- Baskets -->
+  <ellipse cx="90" cy="792" rx="26" ry="12" fill="#F97316" stroke="#1E293B" stroke-width="3"/>
+  <ellipse cx="165" cy="792" rx="26" ry="12" fill="#22C55E" stroke="#1E293B" stroke-width="3"/>
+  <!-- Market Stall Right -->
+  <rect x="465" y="705" width="225" height="217" fill="#E2E8F0" stroke="#1E293B" stroke-width="4"/>
+  <polygon points="452,705 704,705 688,638 468,638" fill="#2563EB" stroke="#1E293B" stroke-width="4"/>
+  <rect x="505" y="655" width="44" height="50" fill="#FACC15"/>
+  <rect x="595" y="655" width="44" height="50" fill="#FACC15"/>
+  <!-- Hanging Banner -->
+  <rect x="265" y="660" width="180" height="48" rx="8" fill="#FACC15" stroke="#1E293B" stroke-width="4"/>
+  <text x="355" y="692" text-anchor="middle" font-family="sans-serif" font-weight="800" font-size="22" fill="#1E293B">হাট-বাজার</text>
+  <!-- Cobble / Dirt Market Road -->
+  <rect x="0" y="922" width="720" height="358" fill="#94A3B8"/>
+  <rect x="0" y="922" width="720" height="28" fill="#64748B"/>
+  <path d="M0 1020 L720 1020" stroke="#CBD5E1" stroke-width="4" stroke-dasharray="28 22"/>
+</svg>

@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 260" width="1200" height="260">
+  <!-- Frame 0: Idle Goat -->
+  <g transform="translate(0,0)">
+    <path d="M74 148 Q56 130 62 118" stroke="#1E293B" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <rect x="86" y="180" width="13" height="60" rx="5" fill="#CBD5E1" stroke="#1E293B" stroke-width="3.5"/>
+    <rect x="158" y="180" width="13" height="60" rx="5" fill="#CBD5E1" stroke="#1E293B" stroke-width="3.5"/>
+    <rect x="74" y="132" width="110" height="58" rx="24" fill="#F8FAFC" stroke="#1E293B" stroke-width="4"/>
+    <rect x="78" y="182" width="14" height="60" rx="5" fill="#F8FAFC" stroke="#1E293B" stroke-width="3.5"/>
+    <rect x="150" y="182" width="14" height="60" rx="5" fill="#F8FAFC" stroke="#1E293B" stroke-width="3.5"/>
+    <g transform="translate(192, 114)">
+      <path d="M-8 -22 Q-22 -48 -32 -40" stroke="#475569" stroke-width="7" fill="none" stroke-linecap="round"/>
+      <path d="M6 -22 Q-6 -48 -16 -44" stroke="#475569" stroke-width="7" fill="none" stroke-linecap="round"/>
+      <ellipse cx="0" cy="0" rx="22" ry="24" fill="#F8FAFC" stroke="#1E293B" stroke-width="4"/>
+      <polygon points="8,22 22,22 14,38" fill="#E2E8F0" stroke="#1E293B" stroke-width="2.5"/>
+      <circle cx="8" cy="-4" r="5" fill="#FFFFFF" stroke="#1E293B" stroke-width="2"/>
+      <circle cx="10" cy="-4" r="2.5" fill="#1E293B"/>
+    </g>
+  </g>
+  <!-- Frame 1: Walk 1 -->
+  <g transform="translate(300,0)">
+    <path d="M74 146 Q56 128 62 116" stroke="#1E293B" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <rect x="82" y="180" width="14" height="60" rx="5" transform="rotate(-18 82 180)" fill="#F8FAFC" stroke="#1E293B" stroke-width="3.5"/>
+    <rect x="154" y="180" width="14" height="60" rx="5" transform="rotate(18 154 180)" fill="#F8FAFC" stroke="#1E293B" stroke-width="3.5"/>
+    <rect x="74" y="128" width="110" height="58" rx="24" fill="#F8FAFC" stroke="#1E293B" stroke-width="4"/>
+    <g transform="translate(194, 110)">
+      <path d="M-8 -22 Q-22 -48 -32 -40" stroke="#475569" stroke-width="7" fill="none" stroke-linecap="round"/>
+      <ellipse cx="0" cy="0" rx="22" ry="24" fill="#F8FAFC" stroke="#1E293B" stroke-width="4"/>
+      <polygon points="8,22 22,22 14,38" fill="#E2E8F0" stroke="#1E293B" stroke-width="2.5"/>
+      <circle cx="8" cy="-4" r="5" fill="#FFFFFF" stroke="#1E293B" stroke-width="2"/>
+      <circle cx="10" cy="-4" r="2.5" fill="#1E293B"/>
+    </g>
+  </g>
+  <!-- Frame 2: Walk 2 -->
+  <g transform="translate(600,0)">
+    <path d="M74 148 Q56 130 62 118" stroke="#1E293B" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <rect x="82" y="182" width="14" height="60" rx="5" transform="rotate(18 82 182)" fill="#F8FAFC" stroke="#1E293B" stroke-width="3.5"/>
+    <rect x="154" y="182" width="14" height="60" rx="5" transform="rotate(-18 154 182)" fill="#F8FAFC" stroke="#1E293B" stroke-width="3.5"/>
+    <rect x="74" y="134" width="110" height="58" rx="24" fill="#F8FAFC" stroke="#1E293B" stroke-width="4"/>
+    <g transform="translate(192, 116)">
+      <path d="M-8 -22 Q-22 -48 -32 -40" stroke="#475569" stroke-width="7" fill="none" stroke-linecap="round"/>
+      <ellipse cx="0" cy="0" rx="22" ry="24" fill="#F8FAFC" stroke="#1E293B" stroke-width="4"/>
+      <polygon points="8,22 22,22 14,38" fill="#E2E8F0" stroke="#1E293B" stroke-width="2.5"/>
+      <circle cx="8" cy="-4" r="5" fill="#FFFFFF" stroke="#1E293B" stroke-width="2"/>
+      <circle cx="10" cy="-4" r="2.5" fill="#1E293B"/>
+    </g>
+  </g>
+  <!-- Frame 3: Headbutt Charge -->
+  <g transform="translate(900,0)">
+    <rect x="74" y="178" width="14" height="60" rx="5" transform="rotate(24 74 178)" fill="#F8FAFC" stroke="#1E293B" stroke-width="3.5"/>
+    <rect x="158" y="178" width="14" height="60" rx="5" transform="rotate(-24 158 178)" fill="#F8FAFC" stroke="#1E293B" stroke-width="3.5"/>
+    <rect x="72" y="130" width="110" height="58" rx="24" fill="#F8FAFC" stroke="#1E293B" stroke-width="4"/>
+    <g transform="translate(198, 134) rotate(35)">
+      <path d="M-8 -22 Q-22 -52 -32 -44" stroke="#475569" stroke-width="8" fill="none" stroke-linecap="round"/>
+      <ellipse cx="0" cy="0" rx="22" ry="24" fill="#F8FAFC" stroke="#1E293B" stroke-width="4"/>
+      <circle cx="8" cy="-4" r="5" fill="#FFFFFF" stroke="#1E293B" stroke-width="2"/>
+      <circle cx="10" cy="-4" r="2.5" fill="#1E293B"/>
+    </g>
+  </g>
+</svg>

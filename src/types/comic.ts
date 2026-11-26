@@ -140,6 +140,12 @@ export interface PublishLogEntry {
 export type VideoRenderStyle = 'stick_meme' | 'cartoon_2d';
 
 export type VideoTheme =
+  | 'clear_day_sky'
+  | 'village_road'
+  | 'bazar_street'
+  | 'river_ghat'
+  | 'field_meadow'
+  | 'tea_stall_day'
   | 'bathroom_rush'
   | 'room_door'
   | 'bedroom_night'
@@ -148,7 +154,8 @@ export type VideoTheme =
   | 'desert_sun'
   | 'office_drama'
   | 'tea_stall'
-  | 'street_night';
+  | 'street_night'
+  | (string & {});
 
 export type VideoAspectRatio = '9:16' | '1:1';
 
@@ -177,7 +184,8 @@ export type VideoAction =
   | 'scream_jaw'
   | 'door_peek'
   | 'collapsed_mess'
-  | 'dramatic_closeup';
+  | 'dramatic_closeup'
+  | 'charge_butt';
 
 export type VideoProp =
   | 'none'
@@ -279,6 +287,7 @@ export interface CharacterKeyframe {
   scale?: number; // 0.6..1.5
   heldProp?: HeldPropType;
   expression?: ExpressionType | 'exhausted';
+  spriteFrame?: number; // optional explicit sprite frame index (0..frameCount-1)
 }
 
 export type SceneVisualEffectType =
@@ -297,12 +306,24 @@ export interface SceneVisualEffect {
   x: number; // 0..1
   y: number; // 0..1
   text?: string;
+  targetCharIndex?: number; // anchors visual FX directly onto target character
 }
 
 export interface SceneSfxCue {
   t: number; // 0..1
   sfx: VideoSfx;
 }
+
+export type CharacterKind = 'human_rig' | 'sprite_actor';
+
+export type OutfitStyle =
+  | 'casual'
+  | 'lungi_panjabi'
+  | 'farmer'
+  | 'office_suit'
+  | 'student'
+  | 'shopkeeper'
+  | 'police';
 
 export interface VideoCharacterState {
   id: CharacterId;
@@ -315,12 +336,18 @@ export interface VideoCharacterState {
   voiceEffect?: VoiceEffectPreset;
   customAudioDataUrl?: string;
   keyframes?: CharacterKeyframe[];
+  kind?: CharacterKind;
+  spriteAssetId?: string;
+  outfitStyle?: OutfitStyle;
+  inlineSvg?: string;
 }
 
 export interface VideoScene {
   sceneIndex: number;
   durationSec: number;
   theme: VideoTheme;
+  backgroundAssetId?: string;
+  backgroundInlineSvg?: string;
   camera: VideoCamera;
   sfx: VideoSfx;
   captionTop?: string;
@@ -328,6 +355,24 @@ export interface VideoScene {
   characters: VideoCharacterState[];
   effects?: SceneVisualEffect[];
   sfxCues?: SceneSfxCue[];
+}
+
+export type HybridAssetCategory = 'background' | 'sprite_actor' | 'prop';
+export type HybridAssetFormat = 'svg' | 'svg_spritesheet' | 'png_spritesheet' | 'png';
+
+export interface HybridAssetItem {
+  id: string;
+  name: string;
+  keywords: string[];
+  category: HybridAssetCategory;
+  format: HybridAssetFormat;
+  source: 'builtin' | 'folder' | 'uploaded' | 'ai_generated';
+  url: string;
+  cols?: number;
+  rows?: number;
+  frameCount?: number;
+  fps?: number;
+  createdAt?: string;
 }
 
 export interface VideoScript {

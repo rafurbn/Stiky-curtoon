@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 260" width="1200" height="260">
+  <!-- Frame 0 -->
+  <g transform="translate(0,0)">
+    <path d="M52 178 L52 72 Q105 56 148 82 L148 178 Z" fill="#EF4444" stroke="#1E293B" stroke-width="4"/>
+    <path d="M52 126 L148 126 L148 178 L52 178 Z" fill="#16A34A" stroke="#1E293B" stroke-width="4"/>
+    <rect x="76" y="142" width="54" height="18" rx="4" fill="#FACC15" stroke="#1E293B" stroke-width="2.5"/>
+    <line x1="148" y1="168" x2="225" y2="168" stroke="#1E293B" stroke-width="5"/>
+    <line x1="205" y1="168" x2="215" y2="115" stroke="#1E293B" stroke-width="5"/>
+    <circle cx="88" cy="202" r="36" fill="none" stroke="#1E293B" stroke-width="7"/>
+    <circle cx="88" cy="202" r="6" fill="#FACC15"/>
+    <line x1="88" y1="166" x2="88" y2="238" stroke="#475569" stroke-width="2.5"/>
+    <line x1="52" y1="202" x2="124" y2="202" stroke="#475569" stroke-width="2.5"/>
+    <circle cx="222" cy="204" r="34" fill="none" stroke="#1E293B" stroke-width="7"/>
+    <circle cx="222" cy="204" r="6" fill="#FACC15"/>
+    <line x1="222" y1="170" x2="222" y2="238" stroke="#475569" stroke-width="2.5"/>
+    <line x1="188" y1="204" x2="256" y2="204" stroke="#475569" stroke-width="2.5"/>
+  </g>
+  <!-- Frame 1 (Rotated spokes + slight bounce) -->
+  <g transform="translate(300,-3)">
+    <path d="M52 178 L52 72 Q105 56 148 82 L148 178 Z" fill="#EF4444" stroke="#1E293B" stroke-width="4"/>
+    <path d="M52 126 L148 126 L148 178 L52 178 Z" fill="#16A34A" stroke="#1E293B" stroke-width="4"/>
+    <rect x="76" y="142" width="54" height="18" rx="4" fill="#FACC15" stroke="#1E293B" stroke-width="2.5"/>
+    <line x1="148" y1="168" x2="225" y2="168" stroke="#1E293B" stroke-width="5"/>
+    <line x1="205" y1="168" x2="215" y2="115" stroke="#1E293B" stroke-width="5"/>
+    <circle cx="88" cy="202" r="36" fill="none" stroke="#1E293B" stroke-width="7"/>
+    <line x1="64" y1="178" x2="112" y2="226" stroke="#475569" stroke-width="2.5"/>
+    <line x1="64" y1="226" x2="112" y2="178" stroke="#475569" stroke-width="2.5"/>
+    <circle cx="222" cy="204" r="34" fill="none" stroke="#1E293B" stroke-width="7"/>
+    <line x1="198" y1="180" x2="246" y2="228" stroke="#475569" stroke-width="2.5"/>
+    <line x1="198" y1="228" x2="246" y2="180" stroke="#475569" stroke-width="2.5"/>
+  </g>
+  <!-- Frame 2 -->
+  <g transform="translate(600,0)">
+    <path d="M52 178 L52 72 Q105 56 148 82 L148 178 Z" fill="#EF4444" stroke="#1E293B" stroke-width="4"/>
+    <path d="M52 126 L148 126 L148 178 L52 178 Z" fill="#16A34A" stroke="#1E293B" stroke-width="4"/>
+    <rect x="76" y="142" width="54" height="18" rx="4" fill="#FACC15" stroke="#1E293B" stroke-width="2.5"/>
+    <line x1="148" y1="168" x2="225" y2="168" stroke="#1E293B" stroke-width="5"/>
+    <line x1="205" y1="168" x2="215" y2="115" stroke="#1E293B" stroke-width="5"/>
+    <circle cx="88" cy="202" r="36" fill="none" stroke="#1E293B" stroke-width="7"/>
+    <line x1="88" y1="166" x2="88" y2="238" stroke="#475569" stroke-width="2.5"/>
+    <line x1="52" y1="202" x2="124" y2="202" stroke="#475569" stroke-width="2.5"/>
+    <circle cx="222" cy="204" r="34" fill="none" stroke="#1E293B" stroke-width="7"/>
+    <line x1="222" y1="170" x2="222" y2="238" stroke="#475569" stroke-width="2.5"/>
+    <line x1="188" y1="204" x2="256" y2="204" stroke="#475569" stroke-width="2.5"/>
+  </g>
+  <!-- Frame 3 -->
+  <g transform="translate(900,-4)">
+    <path d="M52 178 L52 72 Q105 56 148 82 L148 178 Z" fill="#EF4444" stroke="#1E293B" stroke-width="4"/>
+    <path d="M52 126 L148 126 L148 178 L52 178 Z" fill="#16A34A" stroke="#1E293B" stroke-width="4"/>
+    <rect x="76" y="142" width="54" height="18" rx="4" fill="#FACC15" stroke="#1E293B" stroke-width="2.5"/>
+    <line x1="148" y1="168" x2="225" y2="168" stroke="#1E293B" stroke-width="5"/>
+    <line x1="205" y1="168" x2="215" y2="115" stroke="#1E293B" stroke-width="5"/>
+    <circle cx="88" cy="202" r="36" fill="none" stroke="#1E293B" stroke-width="7"/>
+    <line x1="64" y1="178" x2="112" y2="226" stroke="#475569" stroke-width="2.5"/>
+    <line x1="64" y1="226" x2="112" y2="178" stroke="#475569" stroke-width="2.5"/>
+    <circle cx="222" cy="204" r="34" fill="none" stroke="#1E293B" stroke-width="7"/>
+    <line x1="198" y1="180" x2="246" y2="228" stroke="#475569" stroke-width="2.5"/>
+    <line x1="198" y1="228" x2="246" y2="180" stroke="#475569" stroke-width="2.5"/>
+  </g>
+</svg>
