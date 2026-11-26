@@ -241,6 +241,69 @@ export interface VideoVoiceClip {
   provider: 'edge_tts' | 'gemini_tts' | 'custom_upload';
 }
 
+export type HeldPropType =
+  | 'none'
+  | 'smartphone'
+  | 'tea_cup'
+  | 'money'
+  | 'stick'
+  | 'umbrella'
+  | 'football'
+  | 'bucket'
+  | 'book';
+
+export interface ArmPoseDeg {
+  shoulder: number;
+  elbow: number;
+}
+
+export interface LegPoseDeg {
+  hip: number;
+  knee: number;
+}
+
+export interface CharacterKeyframe {
+  t: number; // 0..1 normalized within scene
+  x: number; // 0..1 horizontal position (can go -0.3..1.3 for entry/fly-out)
+  y: number; // 0 = ground, >0 = airborne jump/fly, <0 = crouched/fallen
+  facing?: 1 | -1;
+  rotationDeg?: number; // full body rotation (e.g. 0 -> 1080 for rolling like a ball)
+  curlBall?: number; // 0..1 tuck into rolling ball
+  torsoLeanDeg?: number; // -45..45 lean in facing direction
+  headTiltDeg?: number; // -35..35 head tilt
+  leftArmDeg?: ArmPoseDeg;
+  rightArmDeg?: ArmPoseDeg;
+  leftLegDeg?: LegPoseDeg;
+  rightLegDeg?: LegPoseDeg;
+  vibrate?: number; // 0..1 tickle/laugh/panic shiver
+  scale?: number; // 0.6..1.5
+  heldProp?: HeldPropType;
+  expression?: ExpressionType | 'exhausted';
+}
+
+export type SceneVisualEffectType =
+  | 'impact_star'
+  | 'speed_lines'
+  | 'tickle_sparks'
+  | 'dust_puff'
+  | 'sweat_burst'
+  | 'laugh_burst'
+  | 'screen_shake';
+
+export interface SceneVisualEffect {
+  t: number; // 0..1
+  duration?: number; // 0.1..0.7
+  type: SceneVisualEffectType;
+  x: number; // 0..1
+  y: number; // 0..1
+  text?: string;
+}
+
+export interface SceneSfxCue {
+  t: number; // 0..1
+  sfx: VideoSfx;
+}
+
 export interface VideoCharacterState {
   id: CharacterId;
   name: string;
@@ -251,6 +314,7 @@ export interface VideoCharacterState {
   speech?: string;
   voiceEffect?: VoiceEffectPreset;
   customAudioDataUrl?: string;
+  keyframes?: CharacterKeyframe[];
 }
 
 export interface VideoScene {
@@ -262,6 +326,8 @@ export interface VideoScene {
   captionTop?: string;
   splitScreen?: boolean;
   characters: VideoCharacterState[];
+  effects?: SceneVisualEffect[];
+  sfxCues?: SceneSfxCue[];
 }
 
 export interface VideoScript {

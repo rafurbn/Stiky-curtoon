@@ -437,6 +437,17 @@ export async function startVideoAudioSession(
       triggerSfx(ctx, sfxGain, sc.sfx, when);
     }
 
+    if (Array.isArray(sc.sfxCues)) {
+      for (const cue of sc.sfxCues) {
+        const tNorm = Math.max(0, Math.min(1, Number(cue.t) || 0));
+        const absCueTime = sceneStart + tNorm * sceneDur;
+        if (absCueTime + 0.25 >= startOffsetSec && cue.sfx && cue.sfx !== 'none') {
+          const when = baseTime + Math.max(0, absCueTime - startOffsetSec);
+          triggerSfx(ctx, sfxGain, cue.sfx, when);
+        }
+      }
+    }
+
     for (let cIdx = 0; cIdx < sc.characters.length; cIdx++) {
       const ch = sc.characters[cIdx];
       if (ch.customAudioDataUrl) {

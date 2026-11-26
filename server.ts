@@ -428,22 +428,47 @@ app.post('/api/generate-video', async (req, res) => {
 ${rawUserScript}
 """
 
-YOUR JOB AS AN INTELLIGENT ANIMATION DIRECTOR:
-1. Read the user's script carefully and break it naturally into 2 to 7 animated scenes (choose the exact number of scenes the story needs—do NOT pad or truncate unnecessarily).
-2. PRESERVE the user's dialogue meaning and tone faithfully! If the user wrote speaker lines (like "রাফু: ..."), keep those exact character names in "name" and their dialogues in "speech" (only stripping stage hints like "(চিৎকার করে)" from spoken text and turning those hints into matching expression, action, voiceEffect, camera, and sfx). If the user wrote a narrative story paragraph without dialogue, turn it into crisp, natural spoken Bengali lines that bring their exact story to life.
-3. Automatically infer everything technical from the script itself: renderStyle (if auto), musicStyle, scene theme, camera movement, sound effects (sfx), splitScreen (true if two characters argue across rooms/phones), character visual rig id ("rafu", "folk", "boss", "chacha", "friend"), expression, action, prop, voiceEffect, and realistic scene durationSec (3.0 to 9.0s depending on how long the lines take to speak).`
+YOUR JOB AS AN ARTICULATED PUPPET ANIMATION DIRECTOR:
+1. Read every single physical action and dialogue in the user's script and bring 100% of the visual comedy to life!
+2. Break the story naturally into 2 to 7 scenes (each 2.5–8s). Keep the user's character names ("name") and spoken words ("speech") faithful (e.g. shouts like "হেইইইই!", "আউউউ!", short laughs like "হা হা হা!" if needed when a character is laughing/crying), removing stage parentheses from "speech".
+3. ANIMATE EVERY CHARACTER WITH ARTICULATED KEYFRAMES ("keyframes": 2 to 5 keyframes per character per scene) so the characters physically perform the exact actions in the script!`
       : `CREATE AN ORIGINAL, 100% COPYRIGHT-FREE BENGALI COMEDY ANIMATION STORY FREELY:
 ${
   rawHint
     ? `User idea / prompt: "${rawHint}". Build the funniest, smartest animated reel around this idea.`
-    : `You have COMPLETE creative freedom! Invent a fresh, relatable, hilarious Bangladeshi everyday comedy situation (e.g., mess/hostel life, tea-stall experts, load-shedding panic, rickshaw bargaining, wedding biryani, phone battery 1%, office excuse, exam hall, friend borrowing money, sudden rain, etc.) with a great comedic twist.`
+    : `You have COMPLETE creative freedom! Invent a fresh, relatable, hilarious Bangladeshi everyday physical comedy situation (e.g., mess/hostel prank, tea-stall mishap, phone distraction, rickshaw/rain chaos, friend borrowing money, sudden scare) with slapstick motion and a great twist.`
 }
 ${avoidList}
-1. Choose the ideal number of scenes freely (anywhere from 2 to 6 scenes based on comedic timing—do NOT follow a repetitive fixed template).
-2. Automatically infer renderStyle (if auto), category, musicStyle, theme, camera, sfx, splitScreen, character rigs & names, actions, props, voiceEffect, and scene durations.`;
+1. Choose 2 to 6 scenes freely based on comedic timing.
+2. ANIMATE EVERY CHARACTER WITH ARTICULATED KEYFRAMES ("keyframes": 2 to 5 keyframes per character per scene) so every physical gag, walk, jump, fall, kick, or reaction actually animates smoothly on screen!`;
+
+    const rigDirectionSpec = `
+ARTICULATED PUPPET RIG & KEYFRAME COORDINATE RULES (CRITICAL):
+- Canvas coordinates: x = 0.0 (left edge) to 1.0 (right edge), center is 0.5. Characters can start offscreen (x = -0.2 or 1.2) or fly/roll offscreen (x = 1.25 or -0.25)!
+- Vertical y: 0.0 = standing on floor, +0.12 to +0.40 = jumping/airborne, -0.06 = crouched/fallen low.
+- facing: 1 = facing right, -1 = facing left.
+- rotationDeg: 0 = upright; +90 or -90 = lying flat; 0 -> 1080 = spinning/rolling like a football!
+- curlBall: 0.0 = normal full body; 0.85 to 1.0 = curled into a rolling ball/sphere (use with rotationDeg: 0 -> 1080 when someone rolls away after a kick/hit!).
+- torsoLeanDeg: -40 to +45 (positive leans forward in facing direction, negative leans back).
+- headTiltDeg: -35 to +35 (positive looks down e.g. at phone; negative throws head back laughing/screaming).
+- Arm angles (relative to facing): shoulder 0 = straight down, +70 = forward-chest height (elbow +75 bends forearm up toward face to hold phone/cup!), +95 = reaching straight forward (elbow +10 straightens arm to tickle/push/slap!), +145 = raised overhead in shock, -50 = swung back.
+- Leg angles (relative to facing): hip 0 = straight down, +95 (knee 0) = HIGH KICK straight forward!, +45 (knee -60) = sneaking/walking stride, -45 (knee -30) = back stride.
+- vibrate: 0 = still, 0.7..1.0 = rapid comic trembling (great for tickling hands, hysterical laughing, or panic shiver!).
+- heldProp: attach "smartphone", "tea_cup", "money", "stick", "umbrella", "football", "bucket", "book", or "none" directly to the front hand!
+- expression per keyframe: can change mid-scene (e.g. "laughing" -> "shocked" -> "angry"!).
+- Scene "effects": place timed comic FX right when actions hit! Types: "impact_star" (with text like "DHUM!" or "KICK!"), "tickle_sparks" (with text "সুরসুরি~"), "speed_lines", "dust_puff", "sweat_burst", "laugh_burst" (with text "হা হা!"), "screen_shake".
+- Scene "sfxCues": fire timed SFX at exact impact/laugh/scream moment t (0..1) inside the scene!
+
+CHOREOGRAPHY EXAMPLE (holding phone -> sneak tickle -> kick & roll):
+- Holding phone & laughing: facing:1, x:0.62, y:0, torsoLeanDeg:8, headTiltDeg:22, rightArmDeg:{shoulder:62,elbow:82}, heldProp:"smartphone", vibrate:0.45, expression:"laughing".
+- Sneaking behind & tickling: t:0 x:0.15 -> t:0.55 x:0.46, facing:1, torsoLeanDeg:22, rightArmDeg:{shoulder:92,elbow:12}, leftArmDeg:{shoulder:85,elbow:15}, vibrate:0.9, leftLegDeg:{hip:35,knee:-45}, rightLegDeg:{hip:-20,knee:-25}.
+- Turning & high kick: facing:-1, rightLegDeg:{hip:100,knee:0}, torsoLeanDeg:-15, expression:"angry" + effect impact_star & screen_shake at t:0.45 + sfxCues dramatic_boom!
+- Rolling away like a football: t:0 x:0.35, y:0.12, curlBall:0.85, rotationDeg:0 -> t:1 x:-0.25, y:0.04, curlBall:1.0, rotationDeg:-1080 + effect speed_lines & dust_puff!`;
 
     const ai = getGeminiClient();
     const prompt = `${coreTaskPrompt}
+
+${rigDirectionSpec}
 
 ${styleGuidance}
 ${dialogueInstruction}
@@ -454,17 +479,17 @@ Everything must be 100% original and copyright-free. Never quote copyrighted mov
 Output JSON with:
 - title: short catchy Bengali title
 - hookBanner: short viral 3-6 word Bengali meme hook for the top banner
-- category: short Bengali topic label (e.g. "বন্ধুদের আড্ডা", "অফিস কমেডি", "নিজস্ব স্ক্রিপ্ট")
+- category: short Bengali topic label
 - renderStyle: "stick_meme" or "cartoon_2d"
 - musicStyle: "cinematic_parody" | "comedy" | "quirky" | "dramatic" | "none"
 - fbCaption: engaging Facebook Reels caption with a question and 2-3 hashtags
-- scenes: array of scenes (2 to 7 scenes)`;
+- scenes: array of scenes (2 to 7 scenes) with full character keyframes, effects, and sfxCues.`;
 
     const response = await generateJsonWithRetryAndFallback({
       ai,
       contents: prompt,
       systemInstruction:
-        'You are an expert Bengali comedy animation director. Automatically infer all visual, audio, camera, music, and acting choices directly from the script so the creator only has to write or prompt freely. Return strictly valid JSON matching the schema.',
+        'You are an expert 2D slapstick & comedy puppet animation director. Translate every visual action in the script into explicit timestamped character keyframes (joint angles, positions, rotations, curlBall, heldProp, vibrate) plus timed comic effects and SFX cues. Return strictly valid JSON matching the schema.',
       responseSchema: {
         type: Type.OBJECT,
         properties: {
@@ -512,6 +537,60 @@ Output JSON with:
                 },
                 captionTop: { type: Type.STRING },
                 splitScreen: { type: Type.BOOLEAN },
+                effects: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      t: { type: Type.NUMBER },
+                      duration: { type: Type.NUMBER },
+                      type: {
+                        type: Type.STRING,
+                        enum: [
+                          'impact_star',
+                          'speed_lines',
+                          'tickle_sparks',
+                          'dust_puff',
+                          'sweat_burst',
+                          'laugh_burst',
+                          'screen_shake',
+                        ],
+                      },
+                      x: { type: Type.NUMBER },
+                      y: { type: Type.NUMBER },
+                      text: { type: Type.STRING },
+                    },
+                    required: ['t', 'type', 'x', 'y'],
+                  },
+                },
+                sfxCues: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      t: { type: Type.NUMBER },
+                      sfx: {
+                        type: Type.STRING,
+                        enum: [
+                          'none',
+                          'knock_door',
+                          'dramatic_boom',
+                          'scream_sting',
+                          'door_creak',
+                          'splat_funny',
+                          'laugh',
+                          'gasp',
+                          'thunder',
+                          'pour',
+                          'punchline',
+                          'pop',
+                          'sad_trombone',
+                        ],
+                      },
+                    },
+                    required: ['t', 'sfx'],
+                  },
+                },
                 characters: {
                   type: Type.ARRAY,
                   items: {
@@ -585,8 +664,102 @@ Output JSON with:
                         enum: ['normal', 'panicked', 'dramatic_boss', 'cartoon_high'],
                       },
                       speech: { type: Type.STRING },
+                      keyframes: {
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                            t: { type: Type.NUMBER },
+                            x: { type: Type.NUMBER },
+                            y: { type: Type.NUMBER },
+                            facing: { type: Type.INTEGER },
+                            rotationDeg: { type: Type.NUMBER },
+                            curlBall: { type: Type.NUMBER },
+                            torsoLeanDeg: { type: Type.NUMBER },
+                            headTiltDeg: { type: Type.NUMBER },
+                            leftArmDeg: {
+                              type: Type.OBJECT,
+                              properties: {
+                                shoulder: { type: Type.NUMBER },
+                                elbow: { type: Type.NUMBER },
+                              },
+                              required: ['shoulder', 'elbow'],
+                            },
+                            rightArmDeg: {
+                              type: Type.OBJECT,
+                              properties: {
+                                shoulder: { type: Type.NUMBER },
+                                elbow: { type: Type.NUMBER },
+                              },
+                              required: ['shoulder', 'elbow'],
+                            },
+                            leftLegDeg: {
+                              type: Type.OBJECT,
+                              properties: {
+                                hip: { type: Type.NUMBER },
+                                knee: { type: Type.NUMBER },
+                              },
+                              required: ['hip', 'knee'],
+                            },
+                            rightLegDeg: {
+                              type: Type.OBJECT,
+                              properties: {
+                                hip: { type: Type.NUMBER },
+                                knee: { type: Type.NUMBER },
+                              },
+                              required: ['hip', 'knee'],
+                            },
+                            vibrate: { type: Type.NUMBER },
+                            heldProp: {
+                              type: Type.STRING,
+                              enum: [
+                                'none',
+                                'smartphone',
+                                'tea_cup',
+                                'money',
+                                'stick',
+                                'umbrella',
+                                'football',
+                                'bucket',
+                                'book',
+                              ],
+                            },
+                            expression: {
+                              type: Type.STRING,
+                              enum: [
+                                'happy',
+                                'laughing',
+                                'shocked',
+                                'angry',
+                                'deadpan',
+                                'confused',
+                                'crying',
+                                'smug',
+                                'wink',
+                                'exhausted',
+                              ],
+                            },
+                          },
+                          required: [
+                            't',
+                            'x',
+                            'y',
+                            'facing',
+                            'rotationDeg',
+                            'curlBall',
+                            'torsoLeanDeg',
+                            'headTiltDeg',
+                            'leftArmDeg',
+                            'rightArmDeg',
+                            'leftLegDeg',
+                            'rightLegDeg',
+                            'vibrate',
+                            'heldProp',
+                          ],
+                        },
+                      },
                     },
-                    required: ['id', 'name', 'side', 'expression', 'action', 'prop'],
+                    required: ['id', 'name', 'side', 'expression', 'action', 'prop', 'keyframes'],
                   },
                 },
               },
@@ -626,7 +799,7 @@ Output JSON with:
       .map((sc: Record<string, unknown>, idx: number) => ({
         ...sc,
         sceneIndex: idx,
-        durationSec: Math.max(2.5, Math.min(9.5, Number(sc.durationSec) || 4.5)),
+        durationSec: Math.max(2.2, Math.min(9.5, Number(sc.durationSec) || 4.0)),
       }));
 
     const totalDurationSec = Number(

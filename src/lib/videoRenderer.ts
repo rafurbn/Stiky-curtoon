@@ -15,6 +15,12 @@ import {
   sampleCharacterLipSync,
   type LipSyncSample,
 } from './lipSyncAnalyzer';
+import {
+  drawAnimatedMouth,
+  drawArticulatedRigCharacter,
+  drawSceneVisualEffects,
+  interpolateCharacterKeyframes,
+} from './keyframeRigRenderer';
 
 export interface RenderedVideoResult {
   blob: Blob;
@@ -418,96 +424,6 @@ function drawStickProp(
   ctx.restore();
 }
 
-function drawAnimatedMouth(
-  ctx: CanvasRenderingContext2D,
-  mx: number,
-  my: number,
-  lip: LipSyncSample,
-  expression: VideoCharacterState['expression'],
-  baseWidth = 15,
-  maxOpen = 16
-) {
-  ctx.save();
-  ctx.lineWidth = 3.2;
-  ctx.strokeStyle = '#111827';
-
-  if (lip.openness > 0.08 && lip.viseme !== 'closed') {
-    const rx = baseWidth * lip.width;
-    const ry = Math.max(4, lip.openness * maxOpen);
-
-    if (lip.viseme === 'wide_shout') {
-      // Wide open shouting jaw with upper teeth & tongue
-      ctx.fillStyle = '#111827';
-      ctx.beginPath();
-      ctx.ellipse(mx, my + ry * 0.25, rx * 1.15, ry * 1.18, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-
-      // Upper teeth strip
-      ctx.fillStyle = '#FFFFFF';
-      ctx.beginPath();
-      ctx.roundRect(mx - rx * 0.78, my - ry * 0.85, rx * 1.56, Math.max(4, ry * 0.34), 2);
-      ctx.fill();
-
-      // Tongue arc at bottom
-      ctx.fillStyle = '#94A3B8';
-      ctx.beginPath();
-      ctx.ellipse(mx, my + ry * 0.9, rx * 0.58, Math.max(3, ry * 0.3), 0, Math.PI, Math.PI * 2);
-      ctx.fill();
-    } else if (lip.viseme === 'round_o') {
-      // Classic cartoon round 'O' shout/vowel
-      ctx.fillStyle = '#111827';
-      ctx.beginPath();
-      ctx.ellipse(mx, my + 2, rx * 0.72, Math.max(7, ry * 1.05), 0, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (lip.viseme === 'consonant') {
-      // Narrow teeth/consonant aperture
-      ctx.fillStyle = '#FFFFFF';
-      ctx.beginPath();
-      ctx.roundRect(mx - rx, my - 4, rx * 2, Math.max(7, ry * 0.65), 4);
-      ctx.fill();
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(mx - rx + 2, my);
-      ctx.lineTo(mx + rx - 2, my);
-      ctx.stroke();
-    } else {
-      // mid_vowel oval mouth
-      ctx.fillStyle = '#111827';
-      ctx.beginPath();
-      ctx.ellipse(mx, my + 2, rx, Math.max(5, ry * 0.85), 0, 0, Math.PI * 2);
-      ctx.fill();
-      if (ry > 7) {
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(mx - rx * 0.65, my - ry * 0.55, rx * 1.3, 3.5);
-      }
-    }
-    ctx.restore();
-    return;
-  }
-
-  // Resting expression mouth when silent/paused between words
-  if (expression === 'laughing' || expression === 'shocked') {
-    ctx.fillStyle = '#111827';
-    ctx.beginPath();
-    ctx.ellipse(mx, my + 2, baseWidth * 0.9, 10, 0, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (expression === 'crying' || expression === 'angry') {
-    ctx.beginPath();
-    ctx.arc(mx, my + 9, baseWidth * 0.85, Math.PI * 1.15, Math.PI * 1.85);
-    ctx.stroke();
-  } else if (expression === 'happy' || expression === 'smug') {
-    ctx.beginPath();
-    ctx.arc(mx, my - 4, baseWidth * 0.85, Math.PI * 0.15, Math.PI * 0.85);
-    ctx.stroke();
-  } else {
-    ctx.beginPath();
-    ctx.moveTo(mx - baseWidth * 0.72, my + 2);
-    ctx.lineTo(mx + baseWidth * 0.72, my + 2);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
 
 function drawStickMemeCharacter(
   ctx: CanvasRenderingContext2D,
@@ -1088,8 +1004,9 @@ export function renderVideoFrame(
   const renderStyle = script.renderStyle || 'stick_meme';
   const isStick = renderStyle === 'stick_meme';
   const groundY = Math.round(h * 0.72);
+  const tNorm = Math.max(0, Math.min(1, localT / Math.max(0.5, scene.durationSec)));
 
-  // Camera zoom / shake transforms
+  // Camera zoom / shake transforms (including timed screen_shake effects)
   let camScale = 1;
   let camFocusX = w / 2;
   let camFocusY = h / 2;
@@ -1113,6 +1030,18 @@ export function renderVideoFrame(
     shakeY = Math.cos(elapsedSec * 36) * 6;
   }
 
+  const hasEffectShake = Array.isArray(scene.effects)
+    ? scene.effects.some((fx) => {
+        if (fx.type !== 'screen_shake') return false;
+        const dur = fx.duration ?? 0.25;
+        return tNorm >= fx.t && tNorm <= fx.t + dur;
+      })
+    : false;
+  if (hasEffectShake) {
+    shakeX += Math.sin(elapsedSec * 58) * 14;
+    shakeY += Math.cos(elapsedSec * 49) * 11;
+  }
+
   ctx.save();
   ctx.translate(w / 2 + shakeX, h / 2 + shakeY);
   ctx.scale(camScale, camScale);
@@ -1134,11 +1063,9 @@ export function renderVideoFrame(
   // Active speaker tracking
   const activeSpeaker = getActiveSpeakerInScene(script, sceneIndex, localT, scene);
 
-  // Render scene props & characters
+  // Render background props (doors, toilet, splat) behind characters in stick mode
   if (isStick) {
     const isAnyKnocking = scene.characters.some((c) => c.action === 'knock_door');
-
-    // Draw background props (doors, toilet, splat) behind characters
     scene.characters.forEach((char) => {
       if (char.prop === 'none') return;
       let px = w / 2;
@@ -1153,50 +1080,75 @@ export function renderVideoFrame(
       }
       drawStickProp(ctx, char.prop, px, groundY, elapsedSec, isAnyKnocking);
     });
+  }
 
-    scene.characters.forEach((char, idx) => {
-      let cx = w * 0.5;
-      let facing: 1 | -1 = 1;
-      if (scene.splitScreen) {
-        cx = char.side === 'left' ? w * 0.25 : w * 0.75;
-        facing = char.side === 'left' ? 1 : -1;
-      } else if (scene.characters.length === 2) {
-        cx = char.side === 'left' ? w * 0.28 : w * 0.72;
-        facing = char.side === 'left' ? 1 : -1;
-      } else if (char.prop === 'door_closed') {
-        cx = w * 0.34;
-        facing = 1;
-      }
+  // Render characters (AI articulated keyframe puppet rig if present, else legacy pose fallback)
+  scene.characters.forEach((char, idx) => {
+    let defaultXNorm = 0.5;
+    let defaultFacing: 1 | -1 = 1;
+    if (scene.splitScreen) {
+      defaultXNorm = char.side === 'left' ? 0.25 : 0.75;
+      defaultFacing = char.side === 'left' ? 1 : -1;
+    } else if (scene.characters.length === 2) {
+      defaultXNorm = char.side === 'left' ? 0.28 : 0.72;
+      defaultFacing = char.side === 'left' ? 1 : -1;
+    } else if (char.prop === 'door_closed') {
+      defaultXNorm = 0.34;
+      defaultFacing = 1;
+    } else if (char.side === 'right') {
+      defaultFacing = -1;
+    }
 
-      const isSpeaking = activeSpeaker?.charIndex === idx;
-      const lip = sampleCharacterLipSync(script, sceneIndex, idx, localT, isSpeaking);
+    const isSpeaking = activeSpeaker?.charIndex === idx;
+    const lip = sampleCharacterLipSync(script, sceneIndex, idx, localT, isSpeaking);
+    const rigPose =
+      char.action !== 'dramatic_closeup'
+        ? interpolateCharacterKeyframes(char, tNorm, defaultXNorm, defaultFacing)
+        : null;
+
+    if (rigPose) {
+      drawArticulatedRigCharacter(
+        ctx,
+        char,
+        rigPose,
+        w,
+        groundY,
+        h,
+        elapsedSec,
+        lip,
+        isStick,
+        scene.splitScreen ? 0.9 : 1.05
+      );
+      return;
+    }
+
+    if (isStick) {
       drawStickMemeCharacter(
         ctx,
         char,
-        cx,
+        defaultXNorm * w,
         groundY,
-        facing,
+        defaultFacing,
         elapsedSec,
         localT,
         scene.durationSec,
         lip,
         scene.splitScreen ? 0.9 : 1.05
       );
-    });
-  } else {
-    scene.characters.forEach((char, idx) => {
-      const cx =
-        scene.characters.length === 1
-          ? w * 0.5
-          : char.side === 'left'
-            ? w * 0.28
-            : w * 0.72;
-      const facing: 1 | -1 = char.side === 'right' ? -1 : 1;
-      const isSpeaking = activeSpeaker?.charIndex === idx;
-      const lip = sampleCharacterLipSync(script, sceneIndex, idx, localT, isSpeaking);
-      drawColoredCartoonCharacter(ctx, char, cx, groundY, facing, lip);
-    });
-  }
+    } else {
+      drawColoredCartoonCharacter(
+        ctx,
+        char,
+        defaultXNorm * w,
+        groundY,
+        defaultFacing,
+        lip
+      );
+    }
+  });
+
+  // Render scene visual effects (impact stars, tickle sparks, speed lines, dust puffs, laugh bursts)
+  drawSceneVisualEffects(ctx, scene.effects, w, h, tNorm, isStick);
 
   ctx.restore();
 
