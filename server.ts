@@ -385,97 +385,97 @@ const VALID_VIDEO_THEMES = [
 app.post('/api/generate-video', async (req, res) => {
   try {
     const {
-      category = 'auto',
-      theme = 'auto',
-      renderStyle = 'stick_meme',
+      mode = 'auto',
+      customScript = '',
+      customHint = '',
+      renderStyle = 'auto',
       aspectRatio = '9:16',
       dialogueMode = 'bangla',
-      musicStyle = 'cinematic_parody',
-      storyArc = 'viral_story',
-      targetDurationSec = 22,
-      customHint = '',
       recentTitles = [],
     } = req.body ?? {};
 
-    const chosenCategory =
-      category === 'auto'
-        ? CATEGORY_POOL[Math.floor(Math.random() * CATEGORY_POOL.length)]
-        : String(category);
-    const safeRenderStyle = renderStyle === 'cartoon_2d' ? 'cartoon_2d' : 'stick_meme';
     const safeAspect = aspectRatio === '1:1' ? '1:1' : '9:16';
-    const safeMusic = [
-      'comedy',
-      'quirky',
-      'dramatic',
-      'cinematic_parody',
-      'none',
-    ].includes(String(musicStyle))
-      ? musicStyle
-      : 'cinematic_parody';
+    const requestedStyle =
+      renderStyle === 'stick_meme' || renderStyle === 'cartoon_2d' ? renderStyle : 'auto';
+    const rawUserScript = typeof customScript === 'string' ? customScript.trim() : '';
+    const rawHint = typeof customHint === 'string' ? customHint.trim() : '';
+    const isCustomScriptMode = mode === 'custom_script' && rawUserScript.length > 0;
 
-    const isViralArc = storyArc === 'viral_story';
-    const desiredSec = isViralArc
-      ? Math.max(16, Math.min(36, Number(targetDurationSec) || 22))
-      : Math.max(9, Math.min(16, Number(targetDurationSec) || 13));
-    const sceneCount = isViralArc ? 4 : 3;
+    if (mode === 'custom_script' && !rawUserScript) {
+      return res.status(400).json({ error: 'অনুগ্রহ করে আপনার স্ক্রিপ্ট বা গল্পটি লিখুন।' });
+    }
 
     const styleGuidance =
-      safeRenderStyle === 'stick_meme'
-        ? `STYLE: Viral Black-and-White Stick-Figure Comedy Meme Short (like Bangladeshi meme reels!).
-Use rooms/themes: "room_door", "bathroom_rush", "bedroom_night", "exam_hall".
-Use hilarious stick-figure meme actions: "knock_door", "desperate_squeeze", "scream_jaw", "dramatic_closeup", "door_peek", "collapsed_mess", "shocked_jump", "eye_pop", "facepalm", "hands_up".
-Use stick props: "door_closed", "door_open", "toilet_squat", "splat_mess", "smartphone", "money", "clock", "none".
-Include 1 split-screen scene (splitScreen: true) when two friends argue from different sides, and 1 dramatic parody close-up scene (action: "dramatic_closeup", voiceEffect: "dramatic_boss", sfx: "dramatic_boom") with an original copyright-free heroic movie-parody Bengali dialogue!`
-        : `STYLE: Colorful 2D Bengali Comedy Cartoon Short.
-Use themes: "tea_stall", "office_drama", "rain_storm", "desert_sun", "street_night".`;
-
-    const themeInstruction =
-      theme !== 'auto' && VALID_VIDEO_THEMES.includes(theme as (typeof VALID_VIDEO_THEMES)[number])
-        ? `Center the story around theme "${theme}" (or switch themes cleanly if the punchline moves locations).`
-        : '';
+      requestedStyle === 'stick_meme'
+        ? `Visual style is locked to "stick_meme" (Black-and-white expressive stick-figure comedy meme on white paper). Choose from themes "room_door", "bathroom_rush", "bedroom_night", "exam_hall" (or any theme that fits best) and energetic stick actions.`
+        : requestedStyle === 'cartoon_2d'
+          ? `Visual style is locked to "cartoon_2d" (Colorful 2D Bengali comedy cartoon). Choose colorful outdoor/indoor themes like "tea_stall", "office_drama", "rain_storm", "desert_sun", "street_night", "room_door", "exam_hall".`
+          : `Visual style is "auto": YOU decide whether "stick_meme" (black-and-white high-energy meme comedy) or "cartoon_2d" (colorful 2D storytelling cartoon) fits the script better! For frantic friend/bathroom/room/shouting meme comedy choose "stick_meme"; for scenic/tea-stall/office/rain/outdoor stories choose "cartoon_2d".`;
 
     const dialogueInstruction =
       dialogueMode === 'silent'
         ? 'Silent slapstick mode: set every character speech to "" and convey humor visually + SFX.'
-        : 'Spoken Bengali AI Dubbing mode: write natural, punchy Bangladeshi Bengali dialogues (35–80 chars per line, NO emojis inside speech text so voice synthesis reads naturally!). Assign appropriate voiceEffect per character: "panicked" (urgent desperate friend), "dramatic_boss" (deep cinematic parody hero/villain line), "cartoon_high" (funny squeaky punchline), or "normal".';
+        : 'Spoken Bengali AI Dubbing mode: keep lines punchy, natural, and conversational in Bangladeshi Bengali (or preserve Banglish if written in Banglish). Remove stage-direction parentheses or emojis from spoken "speech" text so TTS reads cleanly. Set "voiceEffect" based on the emotion of each line: "panicked" for shouting, screaming, panic, crying, or lines with "!" / "?!"; "dramatic_boss" for deep heroic/boss/villain/cinematic lines; "cartoon_high" for silly squeaky punchlines; or "normal" for calm speech.';
 
     const avoidList =
       Array.isArray(recentTitles) && recentTitles.length > 0
-        ? `Avoid repeating recent stories: ${recentTitles.slice(0, 8).join(' | ')}.`
+        ? `Avoid repeating these recent stories: ${recentTitles.slice(0, 8).join(' | ')}.`
         : '';
 
-    const hintInstruction =
-      typeof customHint === 'string' && customHint.trim()
-        ? `User story idea: "${customHint.trim()}".`
-        : 'Invent a super relatable, 100% original & copyright-free Bangladeshi friend comedy situation (e.g. bathroom emergency, hostel food theft, borrowing money, exam cheating panic, sudden rain/power cut) with an unexpected hilarious twist at the end!';
+    const coreTaskPrompt = isCustomScriptMode
+      ? `THE USER WROTE THIS SCRIPT/STORY FREELY:
+"""
+${rawUserScript}
+"""
+
+YOUR JOB AS AN INTELLIGENT ANIMATION DIRECTOR:
+1. Read the user's script carefully and break it naturally into 2 to 7 animated scenes (choose the exact number of scenes the story needs—do NOT pad or truncate unnecessarily).
+2. PRESERVE the user's dialogue meaning and tone faithfully! If the user wrote speaker lines (like "রাফু: ..."), keep those exact character names in "name" and their dialogues in "speech" (only stripping stage hints like "(চিৎকার করে)" from spoken text and turning those hints into matching expression, action, voiceEffect, camera, and sfx). If the user wrote a narrative story paragraph without dialogue, turn it into crisp, natural spoken Bengali lines that bring their exact story to life.
+3. Automatically infer everything technical from the script itself: renderStyle (if auto), musicStyle, scene theme, camera movement, sound effects (sfx), splitScreen (true if two characters argue across rooms/phones), character visual rig id ("rafu", "folk", "boss", "chacha", "friend"), expression, action, prop, voiceEffect, and realistic scene durationSec (3.0 to 9.0s depending on how long the lines take to speak).`
+      : `CREATE AN ORIGINAL, 100% COPYRIGHT-FREE BENGALI COMEDY ANIMATION STORY FREELY:
+${
+  rawHint
+    ? `User idea / prompt: "${rawHint}". Build the funniest, smartest animated reel around this idea.`
+    : `You have COMPLETE creative freedom! Invent a fresh, relatable, hilarious Bangladeshi everyday comedy situation (e.g., mess/hostel life, tea-stall experts, load-shedding panic, rickshaw bargaining, wedding biryani, phone battery 1%, office excuse, exam hall, friend borrowing money, sudden rain, etc.) with a great comedic twist.`
+}
+${avoidList}
+1. Choose the ideal number of scenes freely (anywhere from 2 to 6 scenes based on comedic timing—do NOT follow a repetitive fixed template).
+2. Automatically infer renderStyle (if auto), category, musicStyle, theme, camera, sfx, splitScreen, character rigs & names, actions, props, voiceEffect, and scene durations.`;
 
     const ai = getGeminiClient();
-    const prompt = `Create a ${sceneCount}-scene animated comedy video storyboard (~${desiredSec} seconds total) for "@@RAFU FOLK@@".
-Category: ${chosenCategory}.
+    const prompt = `${coreTaskPrompt}
+
 ${styleGuidance}
-${themeInstruction}
 ${dialogueInstruction}
-${hintInstruction}
-${avoidList}
 
-CRITICAL COPYRIGHT RULE:
-Everything MUST be 100% original and copyright-free! Do NOT quote copyrighted movie scripts or songs verbatim; write original funny Bengali parody lines instead.
+COPYRIGHT RULE:
+Everything must be 100% original and copyright-free. Never quote copyrighted movie scripts or songs verbatim; write original funny Bengali parody dialogue instead.
 
-Also generate:
+Output JSON with:
 - title: short catchy Bengali title
-- hookBanner: short viral 3-6 word Bengali meme hook for the top white box (e.g., "বন্ধুর যখন বাথরুম চাপ দেয় 🤣")
-- fbCaption: engaging Facebook Reels caption with a question and 2-3 hashtags.`;
+- hookBanner: short viral 3-6 word Bengali meme hook for the top banner
+- category: short Bengali topic label (e.g. "বন্ধুদের আড্ডা", "অফিস কমেডি", "নিজস্ব স্ক্রিপ্ট")
+- renderStyle: "stick_meme" or "cartoon_2d"
+- musicStyle: "cinematic_parody" | "comedy" | "quirky" | "dramatic" | "none"
+- fbCaption: engaging Facebook Reels caption with a question and 2-3 hashtags
+- scenes: array of scenes (2 to 7 scenes)`;
 
     const response = await generateJsonWithRetryAndFallback({
       ai,
       contents: prompt,
       systemInstruction:
-        'You are a viral Bengali stick-figure comedy animation director. Return strictly valid JSON matching the schema.',
+        'You are an expert Bengali comedy animation director. Automatically infer all visual, audio, camera, music, and acting choices directly from the script so the creator only has to write or prompt freely. Return strictly valid JSON matching the schema.',
       responseSchema: {
         type: Type.OBJECT,
         properties: {
           title: { type: Type.STRING },
           hookBanner: { type: Type.STRING },
+          category: { type: Type.STRING },
+          renderStyle: { type: Type.STRING, enum: ['stick_meme', 'cartoon_2d'] },
+          musicStyle: {
+            type: Type.STRING,
+            enum: ['comedy', 'quirky', 'dramatic', 'cinematic_parody', 'none'],
+          },
           fbCaption: { type: Type.STRING },
           scenes: {
             type: Type.ARRAY,
@@ -594,7 +594,7 @@ Also generate:
             },
           },
         },
-        required: ['title', 'hookBanner', 'fbCaption', 'scenes'],
+        required: ['title', 'hookBanner', 'renderStyle', 'musicStyle', 'fbCaption', 'scenes'],
       },
     });
 
@@ -604,12 +604,29 @@ Also generate:
     }
 
     const parsed = JSON.parse(rawText);
+    const chosenStyle =
+      requestedStyle !== 'auto'
+        ? requestedStyle
+        : parsed.renderStyle === 'cartoon_2d'
+          ? 'cartoon_2d'
+          : 'stick_meme';
+
+    const chosenMusic = [
+      'comedy',
+      'quirky',
+      'dramatic',
+      'cinematic_parody',
+      'none',
+    ].includes(String(parsed.musicStyle))
+      ? parsed.musicStyle
+      : 'cinematic_parody';
+
     const scenes = (Array.isArray(parsed.scenes) ? parsed.scenes : [])
-      .slice(0, sceneCount)
+      .slice(0, 7)
       .map((sc: Record<string, unknown>, idx: number) => ({
         ...sc,
         sceneIndex: idx,
-        durationSec: Math.max(3.0, Math.min(7.5, Number(sc.durationSec) || 4.5)),
+        durationSec: Math.max(2.5, Math.min(9.5, Number(sc.durationSec) || 4.5)),
       }));
 
     const totalDurationSec = Number(
@@ -622,12 +639,12 @@ Also generate:
       id: `vid_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       title: String(parsed.title || 'বন্ধুর মজার কাণ্ড'),
       hookBanner: String(parsed.hookBanner || parsed.title || 'বন্ধুর যখন এমন হয় 🤣'),
-      category: chosenCategory,
-      renderStyle: safeRenderStyle,
+      category: String(parsed.category || (isCustomScriptMode ? 'নিজস্ব স্ক্রিপ্ট' : 'বাংলা কমেডি')),
+      renderStyle: chosenStyle,
       aspectRatio: safeAspect,
-      musicStyle: safeMusic,
-      storyArc: isViralArc ? 'viral_story' : 'quick_short',
-      subtitleStyle: safeRenderStyle === 'stick_meme' ? 'meme_clean' : 'reels_bold',
+      musicStyle: chosenMusic,
+      storyArc: scenes.length <= 3 ? 'quick_short' : 'viral_story',
+      subtitleStyle: chosenStyle === 'stick_meme' ? 'meme_clean' : 'reels_bold',
       totalDurationSec,
       scenes,
       fbCaption: String(parsed.fbCaption || 'কার সাথে এমন হয়েছে? 😂 #RafuFolk #BanglaMeme'),
