@@ -1,13 +1,19 @@
-import type { SavedRenderedVideo, VideoItem } from '../types/comic';
+import type { HybridAssetItem, SavedRenderedVideo, VideoItem } from '../types/comic';
 
 const DB_NAME = 'rafu_folk_video_vault_v1';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_PROJECTS = 'video_projects';
 const STORE_RENDERED = 'rendered_videos';
+const STORE_ASSETS = 'custom_assets';
 
 interface StoredRenderedRecord {
   meta: SavedRenderedVideo;
   blob: Blob;
+}
+
+export interface StoredHybridAssetRecord {
+  asset: HybridAssetItem;
+  dataUrl: string;
 }
 
 function openVaultDb(): Promise<IDBDatabase> {
@@ -20,6 +26,9 @@ function openVaultDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_RENDERED)) {
         db.createObjectStore(STORE_RENDERED, { keyPath: 'meta.id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_ASSETS)) {
+        db.createObjectStore(STORE_ASSETS, { keyPath: 'asset.id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -133,5 +142,56 @@ export async function deleteRenderedVideoFromVault(id: string): Promise<void> {
     });
   } catch (err) {
     console.warn('IndexedDB delete rendered video warning:', err);
+  }
+}
+
+export async function saveCustomAssetToVault(
+  asset: HybridAssetItem,
+  dataUrl: string
+): Promise<void> {
+  try {
+    const db = await openVaultDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_ASSETS, 'readwrite');
+      const store = tx.objectStore(STORE_ASSETS);
+      const record: StoredHybridAssetRecord = { asset, dataUrl };
+      store.put(record);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (err) {
+    console.warn('IndexedDB save custom asset warning:', err);
+  }
+}
+
+export async function loadCustomAssetsFromVault(): Promise<StoredHybridAssetRecord[]> {
+  try {
+    const db = await openVaultDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_ASSETS, 'readonly');
+      const store = tx.objectStore(STORE_ASSETS);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        resolve((req.result as StoredHybridAssetRecord[]) || []);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteCustomAssetFromVault(id: string): Promise<void> {
+  try {
+    const db = await openVaultDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_ASSETS, 'readwrite');
+      const store = tx.objectStore(STORE_ASSETS);
+      store.delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (err) {
+    console.warn('IndexedDB delete custom asset warning:', err);
   }
 }
