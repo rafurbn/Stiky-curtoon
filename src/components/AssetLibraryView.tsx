@@ -13,6 +13,23 @@ import {
   loadImageFromUrl,
   refreshAssetCatalog,
 } from '../lib/hybridSpriteCatalog';
+import {
+  deleteCustomAssetFromVault,
+  saveCustomAssetToVault,
+} from '../lib/videoStorage';
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(reader.error || new Error('File read error'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function svgTextToDataUrl(svg: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
 
 interface SpritePreviewCanvasProps {
   asset: HybridAssetItem;
@@ -197,6 +214,7 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
     setIsUploading(true);
     setStatusMsg(null);
     try {
+      const dataUrl = await fileToDataUrl(uploadFile).catch(() => '');
       const form = new FormData();
       form.append('file', uploadFile);
       form.append('name', uploadName.trim() || uploadFile.name);
@@ -214,6 +232,10 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'আপলোড ব্যর্থ হয়েছে।');
 
+      if (data.asset && dataUrl) {
+        await saveCustomAssetToVault(data.asset, dataUrl);
+      }
+
       setUploadFile(null);
       if (uploadPreviewUrl) URL.revokeObjectURL(uploadPreviewUrl);
       setUploadPreviewUrl('');
@@ -222,7 +244,7 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
       await reloadAssets();
       setStatusMsg({
         type: 'ok',
-        text: `"${data.asset?.name || 'নতুন অ্যাসেট'}" হাইব্রিড লাইব্রেরিতে যুক্ত হয়েছে!`,
+        text: `"${data.asset?.name || 'নতুন অ্যাসেট'}" হাইব্রিড লাইব্রেরিতে যুক্ত হয়েছে (ব্রাউজার ব্যাকআপসহ)!`,
       });
     } catch (err) {
       setStatusMsg({
@@ -259,6 +281,10 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'AI দিয়ে SVG বানানো যায়নি।');
 
+      if (data.asset && typeof data.svg === 'string' && data.svg) {
+        await saveCustomAssetToVault(data.asset, svgTextToDataUrl(data.svg));
+      }
+
       setAiPrompt('');
       setAiName('');
       await reloadAssets();
@@ -282,10 +308,11 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
       const res = await fetch(`/api/assets/${encodeURIComponent(asset.id)}`, {
         method: 'DELETE',
       });
-      if (!res.ok) {
+      if (!res.ok && res.status !== 404) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'মুছে ফেলা যায়নি।');
       }
+      await deleteCustomAssetFromVault(asset.id);
       await reloadAssets();
       setStatusMsg({ type: 'ok', text: `"${asset.name}" লাইব্রেরি থেকে সরানো হয়েছে।` });
     } catch (err) {
@@ -418,7 +445,7 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
               type="text"
               value={uploadKeywords}
               onChange={(e) => setUploadKeywords(e.target.value)}
-              placeholder="যেমন: খরগোশ, গাজর, rabbit, লাফ"
+              placeholder="যেমন: গরু ঘাস খাচ্ছে, গরু রাগান্বিত, হাম্বা, তাড়া করছে"
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-900"
             />
           </div>
@@ -598,20 +625,33 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="flex items-start gap-2.5">
               <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-slate-700" />
-              <div className="space-y-1 text-xs text-slate-600">
-                <p className="font-bold text-slate-900">পিসি ফোল্ডার অটো-লোডার</p>
+              <div className="space-y-1.5 text-xs text-slate-600">
+                <p className="font-bold text-slate-900">স্থায়ী ফোল্ডার ও Render ফ্রি প্ল্যান নোট</p>
                 <p>
-                  সরাসরি{' '}
-                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular text-slate-800">
-                    public/assets/backgrounds/
-                  </code>{' '}
-                  বা{' '}
+                  অ্যাপ থেকে আপলোড করা স্প্রাইট আপনার বর্তমান ব্রাউজারের IndexedDB-তেও সংরক্ষিত থাকে। তবে Render ফ্রি প্ল্যান রিস্টার্ট হলে সার্ভার ডিস্ক রিসেট হয়—তাই সব ডিভাইস থেকে স্থায়ীভাবে পেতে চাইলে ফাইলগুলো সরাসরি GitHub রিপোর{' '}
                   <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular text-slate-800">
                     public/assets/actors/
                   </code>{' '}
-                  ফোল্ডারে SVG/PNG ফাইল রাখলেই অ্যাপ স্বয়ংক্রিয়ভাবে পড়ে নেবে (স্প্রাইটের জন্য নামের শেষে{' '}
-                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular">_4x1</code>{' '}
-                  দিন, যেমন <code className="font-mono-tabular">elephant_4x1.png</code>)।
+                  বা{' '}
+                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular text-slate-800">
+                    public/assets/backgrounds/
+                  </code>{' '}
+                  ফোল্ডারে রাখুন।
+                </p>
+                <p>
+                  একই প্রাণীর একাধিক ভঙ্গির স্প্রাইট (যেমন ঘাস খাওয়া, রাগ, তাড়া করা) আলাদা ফাইলে দিলে নামের শেষে গ্রিড সাইজ ও অবস্থার নাম দিন:{' '}
+                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular">
+                    cow_grazing_4x1.png
+                  </code>
+                  ,{' '}
+                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular">
+                    cow_angry_4x1.png
+                  </code>
+                  ,{' '}
+                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular">
+                    cow_chase_4x1.png
+                  </code>
+                  —তাহলে দৃশ্য অনুযায়ী সঠিক স্প্রাইট শিট বেছে নেবে।
                 </p>
               </div>
             </div>
