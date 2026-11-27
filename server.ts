@@ -411,13 +411,13 @@ const BUILTIN_ASSET_DEFS: HybridAssetMeta[] = [
     fps: 10,
   },
   {
-    id: 'boy_scared',
+    id: 'rafu_scared',
     name: 'রাফু / ছেলে ভয় পেয়েছে (৮-ফ্রেম স্প্রাইট)',
-    keywords: ['ভয়', 'চমকে', 'আতঙ্ক', 'কান্না', 'ভীত', 'ছেলে ভয়', 'রাফু ভয়', 'রফু ভয়', 'boy scared', 'scared', 'shocked', 'afraid', 'panicked', 'crying', 'rafu'],
+    keywords: ['ভয়', 'চমকে', 'আতঙ্ক', 'কান্না', 'ভীত', 'ছেলে ভয়', 'রাফু ভয়', 'রফু ভয়', 'rafu scared', 'boy scared', 'scared', 'shocked', 'afraid', 'panicked', 'crying', 'rafu'],
     category: 'sprite_actor',
     format: 'svg_spritesheet',
     source: 'builtin',
-    url: '/assets/actors/boy_scared.svg',
+    url: '/assets/actors/rafu_scared.svg',
     cols: 4,
     rows: 2,
     frameCount: 8,
@@ -632,17 +632,22 @@ async function scanFolderAssets(
           if (isSvg) {
             try {
               const svgHead = await fs.readFile(path.join(dirPath, entry.name), 'utf8');
-              const vbMatch = svgHead.match(
+              const openTagMatch = svgHead.match(/<svg\b[^>]*>/i);
+              const openTag = openTagMatch ? openTagMatch[0] : svgHead.slice(0, 400);
+              const vbMatch = openTag.match(
                 /viewBox\s*=\s*["']\s*[-0-9.]+\s+[-0-9.]+\s+([0-9.]+)\s+([0-9.]+)\s*["']/i
               );
-              const vbW = vbMatch ? Number(vbMatch[1]) : 0;
-              const vbH = vbMatch ? Number(vbMatch[2]) : 0;
-              if (vbW >= 1280 && vbW <= 1600 && vbH >= 640 && vbH <= 900) {
+              const wAttrMatch = openTag.match(/\bwidth\s*=\s*["']\s*([0-9.]+)(?:px)?\s*["']/i);
+              const hAttrMatch = openTag.match(/\bheight\s*=\s*["']\s*([0-9.]+)(?:px)?\s*["']/i);
+              const vbW = vbMatch ? Number(vbMatch[1]) : wAttrMatch ? Number(wAttrMatch[1]) : 0;
+              const vbH = vbMatch ? Number(vbMatch[2]) : hAttrMatch ? Number(hAttrMatch[1]) : 0;
+              const ratio = vbH > 0 ? vbW / vbH : 0;
+              if (vbW >= 1100 && vbW <= 2200 && vbH >= 550 && vbH <= 1200 && ratio >= 1.55 && ratio <= 2.15) {
                 cols = 4;
                 rows = 2;
                 frameCount = 8;
                 fps = 8;
-              } else if (/viewBox\s*=\s*["']0\s+0\s+1200\s+/i.test(svgHead)) {
+              } else if (vbW === 1200 || /viewBox\s*=\s*["']0\s+0\s+1200\s+/i.test(openTag)) {
                 cols = 4;
                 rows = 1;
                 frameCount = 4;
@@ -1277,7 +1282,7 @@ YOUR JOB AS AN INDEPENDENT CREATIVE AI ANIMATION DIRECTOR:
    - Whenever গরু (cow), বাঘ (tiger), or রাফু/রফু/ছেলে (Rafu/boy) appear, ALWAYS set kind="sprite_actor", renderStyle="cartoon_2d", and pick the matching 8-frame spriteAssetId per scene action:
      * গরু: "cow_grass_eating" (grazing/idle/walking calmly), "cow_mooing" (mooing/speaking/হাম্বা), "cow_attacking" (charging/chasing/angry/গুতো)
      * বাঘ: "tiger_walk_roar" (walking/roaring/talking/idle), "tiger_run_attack" (running/chasing/pouncing/attacking)
-     * রাফু / রফু / ছেলে: "rafu_walk_talk" (walking/talking/idle), "boy_scared" (scared/shocked/crying/panicked), "rafu_running_away" (running away/fleeing/escaping)
+     * রাফু / রফু / ছেলে: "rafu_walk_talk" (walking/talking/idle), "rafu_scared" (scared/shocked/crying/panicked), "rafu_running_away" (running away/fleeing/escaping)
    - Any other character matching our Sprite Actor catalog (কুকুর, ছাগল, বিড়াল, কাক, রিকশা, সিএনজি, or user-uploaded custom sheets): set kind="sprite_actor", renderStyle="cartoon_2d", and set the matching "spriteAssetId" per scene!
    - Any other human character (ফোক, চাচা, বস, দোকানদার) with NO sprite sheet: set kind="human_rig", pick a fitting "outfitStyle", and animate with articulated limb keyframes.
 5. Break the script naturally into 2 to 8 expressive scenes (each 2.5–8.5s). Use descriptive freeform "action" values matching the story (e.g., "grazing", "mooing", "walk_in", "run", "flee", "scared", "chasing", "roar", "charge_butt", "shocked_jump", "idle", etc.).
@@ -1723,11 +1728,12 @@ Output JSON with:
           return findById('rafu_running_away');
         }
         if (
+          spLow === 'rafu_scared' ||
           spLow === 'boy_scared' ||
           ['shocked', 'crying', 'exhausted', 'confused'].includes(charExpr.toLowerCase()) ||
           /(scared|shocked|afraid|fear|panick|scream|jump|cry|ভয়|আতঙ্ক|চমক|কান্না|ওরে|বাঁচাও)/.test(ctxLow)
         ) {
-          return findById('boy_scared');
+          return findById('rafu_scared');
         }
         return findById('rafu_walk_talk');
       }
