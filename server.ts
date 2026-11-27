@@ -446,6 +446,24 @@ function sanitizeSvg(rawInput: string): string {
   if (!/xmlns\s*=/i.test(svg)) {
     svg = svg.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
   }
+  const openTagMatch = svg.match(/^<svg\b[^>]*>/i);
+  if (openTagMatch) {
+    let openTag = openTagMatch[0];
+    const vbMatch = openTag.match(/\bviewBox\s*=\s*["']\s*[-0-9.]+\s+[-0-9.]+\s+([0-9.]+)\s+([0-9.]+)\s*["']/i);
+    if (vbMatch) {
+      const vbW = Number(vbMatch[1]);
+      const vbH = Number(vbMatch[2]);
+      if (vbW > 0 && vbH > 0) {
+        if (!/\bwidth\s*=/i.test(openTag)) {
+          openTag = openTag.replace(/^<svg\b/i, `<svg width="${vbW}"`);
+        }
+        if (!/\bheight\s*=/i.test(openTag)) {
+          openTag = openTag.replace(/^<svg\b/i, `<svg height="${vbH}"`);
+        }
+        svg = openTag + svg.slice(openTagMatch[0].length);
+      }
+    }
+  }
   return svg;
 }
 
@@ -760,10 +778,21 @@ app.post('/api/assets/upload', uploadAsset.single('file'), async (req, res) => {
         ? 'svg'
         : 'png';
 
+    const autoKeywords = Array.from(
+      new Set([
+        baseName.toLowerCase(),
+        ...baseName
+          .toLowerCase()
+          .split(/[\s,_\-।()]+/)
+          .map((w) => w.trim())
+          .filter((w) => w.length >= 2),
+      ])
+    ).filter(Boolean);
+
     const meta: HybridAssetMeta = {
       id,
       name: baseName,
-      keywords: parsedKeywords.length > 0 ? parsedKeywords : [baseName.toLowerCase()],
+      keywords: parsedKeywords.length > 0 ? parsedKeywords : autoKeywords,
       category: cleanCategory,
       format,
       source: 'uploaded',
@@ -1043,6 +1072,7 @@ app.post('/api/generate-video', async (req, res) => {
       aspectRatio = '9:16',
       dialogueMode = 'bangla',
       recentTitles = [],
+      clientCustomAssets = [],
     } = req.body ?? {};
 
     const safeAspect = aspectRatio === '1:1' ? '1:1' : '9:16';
@@ -1056,22 +1086,53 @@ app.post('/api/generate-video', async (req, res) => {
       return res.status(400).json({ error: 'অনুগ্রহ করে আপনার স্ক্রিপ্ট বা গল্পটি লিখুন।' });
     }
 
-    const hybridCatalog = await getAllHybridAssets();
+    const serverCatalog = await getAllHybridAssets();
+    const mergedById = new Map<string, HybridAssetMeta>();
+    for (const a of serverCatalog) mergedById.set(a.id.toLowerCase(), a);
+    if (Array.isArray(clientCustomAssets)) {
+      for (const ca of clientCustomAssets as Array<Record<string, unknown>>) {
+        const cid = typeof ca?.id === 'string' ? ca.id.trim() : '';
+        if (!cid || mergedById.has(cid.toLowerCase())) continue;
+        mergedById.set(cid.toLowerCase(), {
+          id: cid,
+          name: String(ca.name || cid),
+          keywords: Array.isArray(ca.keywords) ? ca.keywords.map((k) => String(k)) : [String(ca.name || cid)],
+          category:
+            ca.category === 'background'
+              ? 'background'
+              : ca.category === 'prop'
+                ? 'prop'
+                : 'sprite_actor',
+          format:
+            ca.format === 'svg' || ca.format === 'png' || ca.format === 'png_spritesheet' || ca.format === 'svg_spritesheet'
+              ? ca.format
+              : 'png_spritesheet',
+          source: 'uploaded',
+          url: '',
+          cols: Number(ca.cols) || undefined,
+          rows: Number(ca.rows) || undefined,
+          frameCount: Number(ca.frameCount) || undefined,
+          fps: Number(ca.fps) || undefined,
+        });
+      }
+    }
+    const hybridCatalog = Array.from(mergedById.values());
+
     const availableBackgrounds = hybridCatalog
       .filter((a) => a.category === 'background')
-      .map((a) => `${a.id} ("${a.name}" · keywords: ${a.keywords.slice(0, 5).join(', ')})`)
+      .map((a) => `${a.id} ("${a.name}" · keywords: ${a.keywords.slice(0, 6).join(', ')})`)
       .join(' | ');
     const availableSpriteActors = hybridCatalog
       .filter((a) => a.category === 'sprite_actor')
-      .map((a) => `${a.id} ("${a.name}" · keywords: ${a.keywords.slice(0, 5).join(', ')})`)
+      .map((a) => `${a.id} ("${a.name}" · keywords: ${a.keywords.slice(0, 6).join(', ')})`)
       .join(' | ');
 
     const styleGuidance =
       requestedStyle === 'stick_meme'
-        ? `Visual style is locked to "stick_meme" (Black-and-white expressive stick-figure comedy meme on white paper). Choose matching themes or hybrid backgrounds and energetic actions.`
+        ? `Visual style is locked to "stick_meme" (Black-and-white expressive stick-figure comedy meme on white paper). Still use uploaded sprite_actor assets cleanly whenever the script mentions them.`
         : requestedStyle === 'cartoon_2d'
-          ? `Visual style is locked to "cartoon_2d" (Colorful 2D Bangladeshi comedy cartoon using our Hybrid Sprite + SVG Engine!).`
-          : `Visual style is "auto": Choose "cartoon_2d" whenever the story involves outdoor places (clear sky, village, bazar, river, field, tea stall) or animals/vehicles (cow, dog, goat, rickshaw, CNG, tiger, etc.); choose "stick_meme" for frantic indoor/room/bathroom friend memes.`;
+          ? `Visual style is locked to "cartoon_2d" (Colorful 2D cartoon animation powered by the user's Hybrid Sprite Sheets & SVG Backgrounds!).`
+          : `Visual style is "auto": Choose "cartoon_2d" whenever the story uses ANY sprite-sheet character from the catalog, outdoor/colorful settings, or narrative storytelling; choose "stick_meme" only for classic black-and-white human stick-figure indoor/office/room memes.`;
 
     const dialogueInstruction =
       dialogueMode === 'silent'
@@ -1089,50 +1150,46 @@ app.post('/api/generate-video', async (req, res) => {
 ${rawUserScript}
 """
 
-YOUR JOB AS A HYBRID SPRITE & PUPPET ANIMATION DIRECTOR:
-1. Read EVERY single detail in the script: setting/weather ("পরিষ্কার আকাশ", "গ্রাম", "বাজার", "মাঠ", "নদী", etc.), human characters + their outfits/props ("লাঠি", "লুঙ্গি", "পাঞ্জাবি", etc.), AND every animal or vehicle ("গরু", "কুকুর", "ছাগল", "রিকশা", etc.)!
-2. NEVER force an outdoor/clear-sky script into a dark night room or office! Pick the matching "backgroundAssetId" from the catalog below, OR if the script describes a place not in the catalog, set a new snake_case "backgroundAssetId" + clear "backgroundDescription" so our AI auto-draws a fresh SVG background!
-3. Break the story naturally into 2 to 7 scenes (each 2.5–8s). Keep the user's character names ("name") and spoken words ("speech") faithful, removing stage parentheses from "speech".
-4. FOR HUMANS: set kind="human_rig", pick the best "outfitStyle" ("lungi_panjabi", "farmer", "office_suit", "student", "shopkeeper", "police", or "casual"), and animate with full articulated keyframes!
-5. FOR ANIMALS, CREATURES, OR VEHICLES: NEVER draw them as stick-figure humans! Set kind="sprite_actor", pick matching "spriteAssetId" from the Sprite Actor catalog below (e.g. "cow", "dog", "goat", "rickshaw", "auto_cng", "crow", "cat", "tiger"), OR if it's a new animal/object not in the catalog, invent a snake_case "spriteAssetId" + write "actorDescription" (e.g., "cartoon elephant walking and spraying water") so our engine auto-draws a 4-frame sprite sheet!`
-      : `CREATE AN ORIGINAL, 100% COPYRIGHT-FREE BENGALI COMEDY ANIMATION STORY FREELY:
+YOUR JOB AS AN INDEPENDENT CREATIVE AI ANIMATION DIRECTOR:
+1. You have COMPLETE creative freedom over story pacing, camera angles, comedy/drama timing, visual effects, and choreography — NEVER force preset templates (like bathroom/office memes) onto the user's story! Build everything 100% from the user's script and setting!
+2. Read EVERY setting/environment detail in the script ("পরিষ্কার আকাশ", "গ্রাম", "বাজার", "মাঠ", "নদী", "চা-দোকান", "জঙ্গল", "রেল স্টেশন", etc.):
+   - Pick the best matching "backgroundAssetId" from the Background catalog below.
+   - If the script's setting is NOT in the catalog, invent a clear snake_case "backgroundAssetId" AND write a vivid "backgroundDescription" so our AI auto-draws a bespoke colorful SVG background for that scene!
+3. Cast ONLY the characters that appear in the user's script! If the script only has sprite-sheet animals/vehicles (e.g. গরু ও কুকুর, বাঘ ও ছাগল, রিকশা ও সিএনজি), DO NOT invent unrelated human characters! Keep the user's exact character names ("name") and spoken words ("speech") faithful.
+4. SPRITE-SHEET ACTORS vs HUMANS:
+   - Any character matching our Sprite Actor catalog (uploaded custom sprite sheets OR built-in animals/vehicles, including typos like "গুরু" -> "গরু"): set kind="sprite_actor", renderStyle="cartoon_2d", and set the matching "spriteAssetId" for each scene! If multiple uploaded sheets exist for different actions of the same character, pick the best matching "spriteAssetId" per scene!
+   - Any human character in the script: set kind="human_rig", pick a fitting "outfitStyle", and animate with articulated limb keyframes.
+5. Break the script naturally into 2 to 8 expressive scenes (each 2.5–8.5s). Use descriptive freeform "action" values matching the story (e.g., "grazing", "walk_in", "run", "chasing", "arguing", "charge_butt", "dancing", "shocked_jump", "idle", etc.).
+6. SILENT VS SPOKEN CHARACTERS: Only give spoken "speech" lines to characters who actually speak or make sounds in the script. If an animal acts silently in a scene, set speech="" and tell the action via captionTop, keyframes, effects, and sfxCues!`
+      : `CREATE AN ORIGINAL, 100% COPYRIGHT-FREE BENGALI SHORT VIDEO FREELY:
 ${
   rawHint
-    ? `User idea / prompt: "${rawHint}". Build the funniest, smartest animated reel around this idea.`
-    : `You have COMPLETE creative freedom! Invent a fresh, relatable, hilarious Bangladeshi everyday comedy situation (village cow chase, street rickshaw chaos, tea-stall gossip, hostel prank, friend borrowing money, rainy mishap) using our Hybrid Sprite + Puppet system.`
+    ? `User idea / prompt: "${rawHint}". Build a vivid, entertaining animated video faithfully around this idea using the available sprite sheets & backgrounds.`
+    : `You have COMPLETE creative freedom! Invent a fresh, relatable, hilarious or heartfelt Bangladeshi short animated story using our available sprite-sheet characters, human puppets, and backgrounds.`
 }
 ${avoidList}
-1. Choose 2 to 6 scenes freely based on comedic timing.
-2. Match environments to our Hybrid Backgrounds ("clear_day_sky", "village_road", "bazar_street", "river_ghat", "field_meadow", "tea_stall_day", etc.) and include Hybrid Sprite Actors ("cow", "dog", "goat", "rickshaw", etc.) whenever animals or vehicles fit!`;
+1. Choose 2 to 7 scenes freely based on story flow and comedic timing.
+2. Cast matching characters from the Sprite Actor catalog below (kind="sprite_actor") and/or humans (kind="human_rig"), and pair every scene with the best matching Background ("backgroundAssetId") or a fresh "backgroundDescription".`;
 
     const hybridAssetSpec = `
-HYBRID ASSET CATALOG CURRENTLY AVAILABLE:
-- Hybrid Backgrounds ("backgroundAssetId"): ${availableBackgrounds}
-  (Legacy procedural themes also supported if needed: ${VALID_VIDEO_THEMES.join(', ')})
-- Hybrid 4-Frame Sprite Actors ("spriteAssetId" when kind="sprite_actor"): ${availableSpriteActors}
+AVAILABLE ASSET CATALOG (USER-UPLOADED + BUILT-IN):
+- Backgrounds ("backgroundAssetId"): ${availableBackgrounds || 'none yet (provide backgroundDescription)'}
+  (Optional fallback themes if stick_meme: ${VALID_VIDEO_THEMES.join(', ')})
+- Sprite-Sheet Characters ("spriteAssetId" when kind="sprite_actor"): ${availableSpriteActors || 'none'}
 
-ARTICULATED PUPPET RIG, SPRITE ACTOR & KEYFRAME RULES (CRITICAL):
-- Canvas coordinates: x = 0.0 (left edge) to 1.0 (right edge), center is 0.5. Keep speaking characters between x = 0.16 and x = 0.84 so speech bubbles never get cut off! Characters can start offscreen (-0.2 or 1.2) or fly/roll offscreen.
-- Vertical y: 0.0 = standing firmly on ground (NEVER set y < -0.02 for standing/charging poses, or feet clip below the floor!). Use y = +0.12 to +0.38 for jumping/airborne!
-- facing: 1 = facing right, -1 = facing left.
-- For kind="sprite_actor" (like cow, dog, rickshaw):
-  * Set keyframes with x, y (>=0), facing, rotationDeg (0 upright), action ("idle", "walk_in", "run", or "charge_butt" for charging/headbutting on frame 3!), and optional spriteFrame (0=idle, 1=walkA, 2=walkB, 3=charge/action).
-  * Keep sprite actors facing toward their target (e.g. cow on right facing=-1 charging left toward human at x=0.35).
-- For kind="human_rig":
+ANIMATION & KEYFRAME DIRECTION RULES:
+- Canvas coordinates: x = 0.0 (left edge) to 1.0 (right edge), center = 0.5. Keep static speaking characters between x = 0.16 and x = 0.84. When entering or exiting offscreen, animate x from/to -0.25 or 1.25!
+- Vertical y: 0.0 = standing firmly on ground (never below -0.02 for ground poses). Use y = +0.12 to +0.38 for jumping/airborne!
+- facing: 1 = facing right, -1 = facing left. Face the direction of movement or toward the scene partner.
+- For kind="sprite_actor" (all sprite-sheet characters):
+  * Always set kind="sprite_actor" and a valid "spriteAssetId" from the catalog above.
+  * Provide clean keyframes with t, x, y (>=0), facing, rotationDeg (0 upright), scale, expression.
+  * IMPORTANT: Leave "spriteFrame" UNSET during walking/running/moving keyframes so the engine smoothly animates across the sprite sheet frames! Only set spriteFrame: 3 at a brief climax impact/attack keyframe if desired.
+- For kind="human_rig" (humans):
   * outfitStyle: "casual" | "lungi_panjabi" | "farmer" | "office_suit" | "student" | "shopkeeper" | "police".
-  * rotationDeg: 0 = upright; +90 or -90 = fallen flat; 0 -> 1080 = rolling ball.
-  * curlBall: 0.0 normal; 0.85..1.0 curled into rolling ball.
-  * torsoLeanDeg (-40..+45), headTiltDeg (-35..+35), vibrate (0..1), heldProp ("none", "smartphone", "tea_cup", "money", "stick", "umbrella", "football", "bucket", "book").
-  * Arm angles (relative to facing): shoulder 0 = down, +70 (elbow +75) = holding phone/cup, +95 (elbow +10) = reaching/poking/swinging stick!, +145 = raised overhead in shock.
-  * Leg angles (relative to facing): hip 0 = down, +95 (knee 0) = HIGH KICK, +45 (knee -60) = walking stride.
-- Scene "effects": ALWAYS set "targetCharIndex" (0-based index of the hit/affected character in scene.characters) for "impact_star", "tickle_sparks", "sweat_burst", and "laugh_burst" so the effect locks directly onto the character instead of floating in empty sky!
-- Scene "sfxCues": fire timed SFX at exact impact/laugh/scream moment t (0..1) inside the scene!
-
-CHOREOGRAPHY EXAMPLE (man with stick teasing cow -> cow headbutts man flying):
-- backgroundAssetId: "clear_day_sky", theme: "clear_day_sky", renderStyle: "cartoon_2d"
-- Char 0 (human_rig, outfitStyle:"lungi_panjabi", heldProp:"stick"): x=0.32, y=0, facing=1, rightArmDeg:{shoulder:88,elbow:10} poking stick -> at t=0.55 gets hit: x=0.28->0.14, y=0.26, rotationDeg=-45, expression:"shocked".
-- Char 1 (sprite_actor, spriteAssetId:"cow", action:"charge_butt"): x=0.72, y=0, facing=-1, spriteFrame:0 -> t=0.45 charges fast to x=0.42, spriteFrame:3!
-- Effect: { t: 0.48, duration: 0.35, type: "impact_star", x: 0.34, y: 0.62, text: "গুতো!", targetCharIndex: 0 } + { t: 0.48, duration: 0.3, type: "screen_shake", x: 0.5, y: 0.5 }!`;
+  * Set keyframes with t, x, y, facing, rotationDeg, curlBall, torsoLeanDeg, headTiltDeg, leftArmDeg, rightArmDeg, leftLegDeg, rightLegDeg, vibrate, heldProp ("none", "smartphone", "tea_cup", "money", "stick", "umbrella", "football", "bucket", "book").
+- Scene "effects": ALWAYS set "targetCharIndex" (0-based index in scene.characters) for "impact_star", "tickle_sparks", "sweat_burst", and "laugh_burst" so effects anchor onto the character.
+- Scene "sfxCues": fire timed SFX at exact comedic/dramatic moments t (0..1) inside the scene.`;
 
     const ai = getGeminiClient();
     const prompt = `${coreTaskPrompt}
@@ -1143,22 +1200,22 @@ ${styleGuidance}
 ${dialogueInstruction}
 
 COPYRIGHT RULE:
-Everything must be 100% original and copyright-free. Never quote copyrighted movie scripts or songs verbatim; write original funny Bengali parody dialogue instead.
+Everything must be 100% original and copyright-free. Never quote copyrighted movie scripts or songs verbatim; write original natural Bengali dialogue instead.
 
 Output JSON with:
 - title: short catchy Bengali title
-- hookBanner: short viral 3-6 word Bengali meme hook for the top banner
+- hookBanner: short viral 3-6 word Bengali hook for the top banner
 - category: short Bengali topic label
-- renderStyle: "stick_meme" or "cartoon_2d"
-- musicStyle: "cinematic_parody" | "comedy" | "quirky" | "dramatic" | "none"
+- renderStyle: "cartoon_2d" or "stick_meme"
+- musicStyle: "comedy" | "quirky" | "dramatic" | "cinematic_parody" | "none"
 - fbCaption: engaging Facebook Reels caption with a question and 2-3 hashtags
-- scenes: array of scenes (2 to 7 scenes) with backgroundAssetId, character kind/spriteAssetId/outfitStyle, full keyframes, effects with targetCharIndex, and sfxCues.`;
+- scenes: array of 2 to 8 scenes with backgroundAssetId (and optional backgroundDescription), character kind/spriteAssetId/outfitStyle, keyframes, effects, and sfxCues.`;
 
     const response = await generateJsonWithRetryAndFallback({
       ai,
       contents: prompt,
       systemInstruction:
-        'You are an expert 2D hybrid sprite & articulated puppet animation director. Match backgrounds with backgroundAssetId, animals/vehicles with kind="sprite_actor" + spriteAssetId, and humans with kind="human_rig" + outfitStyle + articulated keyframes. Lock comic FX onto characters with targetCharIndex. Return strictly valid JSON matching the schema.',
+        'You are an independent, creative 2D animation director. Freely direct any story written by the user using their uploaded & built-in sprite-sheet characters (kind="sprite_actor" + spriteAssetId), human puppets (kind="human_rig"), and matching backgrounds (backgroundAssetId or backgroundDescription). Never lock stories into preset memes. Return strictly valid JSON matching the schema.',
       responseSchema: {
         type: Type.OBJECT,
         properties: {
@@ -1265,10 +1322,7 @@ Output JSON with:
                   items: {
                     type: Type.OBJECT,
                     properties: {
-                      id: {
-                        type: Type.STRING,
-                        enum: ['rafu', 'folk', 'boss', 'chacha', 'friend'],
-                      },
+                      id: { type: Type.STRING },
                       name: { type: Type.STRING },
                       kind: {
                         type: Type.STRING,
@@ -1304,49 +1358,8 @@ Output JSON with:
                           'exhausted',
                         ],
                       },
-                      action: {
-                        type: Type.STRING,
-                        enum: [
-                          'idle',
-                          'walk_in',
-                          'laugh',
-                          'point_laugh',
-                          'panting',
-                          'shocked_jump',
-                          'eye_pop',
-                          'facepalm',
-                          'hands_up',
-                          'pour_water',
-                          'sip_tea',
-                          'run',
-                          'knock_door',
-                          'desperate_squeeze',
-                          'scream_jaw',
-                          'door_peek',
-                          'collapsed_mess',
-                          'dramatic_closeup',
-                          'charge_butt',
-                        ],
-                      },
-                      prop: {
-                        type: Type.STRING,
-                        enum: [
-                          'none',
-                          'door_closed',
-                          'door_open',
-                          'toilet_squat',
-                          'splat_mess',
-                          'umbrella_normal',
-                          'umbrella_upside_down',
-                          'broken_umbrella',
-                          'water_tap_glass',
-                          'tea_cup',
-                          'smartphone',
-                          'money',
-                          'laptop',
-                          'clock',
-                        ],
-                      },
+                      action: { type: Type.STRING },
+                      prop: { type: Type.STRING },
                       voiceEffect: {
                         type: Type.STRING,
                         enum: ['normal', 'panicked', 'dramatic_boss', 'cartoon_high'],
@@ -1398,6 +1411,7 @@ Output JSON with:
                               required: ['hip', 'knee'],
                             },
                             vibrate: { type: Type.NUMBER },
+                            scale: { type: Type.NUMBER },
                             heldProp: {
                               type: Type.STRING,
                               enum: [
@@ -1429,26 +1443,11 @@ Output JSON with:
                             },
                             spriteFrame: { type: Type.INTEGER },
                           },
-                          required: [
-                            't',
-                            'x',
-                            'y',
-                            'facing',
-                            'rotationDeg',
-                            'curlBall',
-                            'torsoLeanDeg',
-                            'headTiltDeg',
-                            'leftArmDeg',
-                            'rightArmDeg',
-                            'leftLegDeg',
-                            'rightLegDeg',
-                            'vibrate',
-                            'heldProp',
-                          ],
+                          required: ['t', 'x', 'y', 'facing'],
                         },
                       },
                     },
-                    required: ['id', 'name', 'side', 'expression', 'action', 'prop', 'keyframes'],
+                    required: ['id', 'name', 'kind', 'side', 'expression', 'action', 'keyframes'],
                   },
                 },
               },
@@ -1466,10 +1465,42 @@ Output JSON with:
     }
 
     const parsed = JSON.parse(rawText);
+    const fullStoryContext = `${rawUserScript} ${rawHint} ${String(parsed.title || '')} ${JSON.stringify(parsed.scenes || [])}`
+      .toLowerCase()
+      .replace(/গুরু/g, 'গরু');
+
+    const matchesCatalogAsset = hybridCatalog.some((asset) => {
+      const idLow = asset.id.toLowerCase();
+      if (idLow.length >= 2 && fullStoryContext.includes(idLow)) return true;
+      for (const kw of asset.keywords) {
+        const k = kw.toLowerCase().replace(/গুরু/g, 'গরু').trim();
+        if (k.length >= 2 && fullStoryContext.includes(k)) return true;
+      }
+      for (const word of asset.name.toLowerCase().replace(/গুরু/g, 'গরু').split(/[\s,_\-()]+/)) {
+        if (word.length >= 2 && fullStoryContext.includes(word)) return true;
+      }
+      return false;
+    });
+
+    const hasOutdoorOrStorySetting =
+      /(আকাশ|গ্রাম|মাঠ|নদী|বাজার|চা|বাগান|বৃষ্টি|রাস্তা|রেল|স্কুল|বন|জঙ্গল|সাগর|পাহাড়|মেলা|স্টেশন|ছাদ|পার্ক|ঘাস|outdoor|sky|village|meadow|field|river|bazar|forest)/.test(
+        fullStoryContext
+      );
+
+    const anyParsedUsesSpriteOrBg =
+      Array.isArray(parsed.scenes) &&
+      parsed.scenes.some((sc: Record<string, unknown>) => {
+        if (typeof sc.backgroundAssetId === 'string' && sc.backgroundAssetId.trim()) return true;
+        return (
+          Array.isArray(sc.characters) &&
+          sc.characters.some((c: Record<string, unknown>) => c?.kind === 'sprite_actor' || Boolean(c?.spriteAssetId))
+        );
+      });
+
     const chosenStyle =
       requestedStyle !== 'auto'
         ? requestedStyle
-        : parsed.renderStyle === 'cartoon_2d'
+        : matchesCatalogAsset || hasOutdoorOrStorySetting || anyParsedUsesSpriteOrBg || parsed.renderStyle === 'cartoon_2d'
           ? 'cartoon_2d'
           : 'stick_meme';
 
@@ -1486,8 +1517,95 @@ Output JSON with:
     const knownAssetIds = new Set(hybridCatalog.map((a) => a.id.toLowerCase()));
     const knownLegacyThemes = new Set<string>([...VALID_VIDEO_THEMES]);
     const autoSvgCache = new Map<string, { assetId?: string; svg: string }>();
+    const spriteCatalog = hybridCatalog.filter((a) => a.category === 'sprite_actor');
+    const bgCatalog = hybridCatalog.filter((a) => a.category === 'background');
 
-    const rawScenes = (Array.isArray(parsed.scenes) ? parsed.scenes : []).slice(0, 7);
+    const scoreAssetMatch = (asset: HybridAssetMeta, queryLower: string, requestedIdLower: string): number => {
+      let score = 0;
+      const idLow = asset.id.toLowerCase();
+      const assetNameLow = asset.name.toLowerCase().replace(/গুরু/g, 'গরু');
+      if (requestedIdLower && idLow === requestedIdLower) {
+        score += asset.source === 'builtin' ? 5 : 8;
+      }
+      for (const kw of asset.keywords) {
+        const k = kw.toLowerCase().replace(/গুরু/g, 'গরু').trim();
+        if (k.length >= 2 && queryLower.includes(k)) {
+          score += asset.source === 'builtin' ? 3 : 7;
+        }
+      }
+      for (const word of assetNameLow.split(/[\s,_\-()]+/)) {
+        if (word.length >= 2 && queryLower.includes(word)) {
+          score += asset.source === 'builtin' ? 2 : 5;
+        }
+      }
+      return score;
+    };
+
+    const pickBestSpriteForContext = (
+      charName: string,
+      charContext: string,
+      requestedSpriteId: string
+    ): HybridAssetMeta | undefined => {
+      const normalizedQuery = `${charName} ${charContext}`.toLowerCase().replace(/গুরু/g, 'গরু');
+      const reqLow = requestedSpriteId.toLowerCase();
+      const requestedAsset = spriteCatalog.find((a) => a.id.toLowerCase() === reqLow);
+
+      let best: HybridAssetMeta | undefined;
+      let bestScore = 0;
+
+      for (const asset of spriteCatalog) {
+        const score = scoreAssetMatch(asset, normalizedQuery, reqLow);
+        if (score > bestScore) {
+          bestScore = score;
+          best = asset;
+        }
+      }
+
+      if (bestScore > 0) return best;
+      return requestedAsset;
+    };
+
+    const nameMatchesSpriteCatalog = (charName: string): HybridAssetMeta | undefined => {
+      const cleanName = charName.toLowerCase().replace(/গুরু/g, 'গরু').trim();
+      if (!cleanName) return undefined;
+      let best: HybridAssetMeta | undefined;
+      let bestScore = 0;
+      for (const asset of spriteCatalog) {
+        const score = scoreAssetMatch(asset, cleanName, cleanName);
+        if (score > bestScore) {
+          bestScore = score;
+          best = asset;
+        }
+      }
+      return bestScore >= 3 ? best : undefined;
+    };
+
+    const pickBestBackgroundForContext = (
+      sceneText: string,
+      requestedBgId: string,
+      requestedDesc: string
+    ): HybridAssetMeta | undefined => {
+      const reqLow = requestedBgId.toLowerCase();
+      const exact = bgCatalog.find((a) => a.id.toLowerCase() === reqLow);
+      const query = `${sceneText} ${requestedDesc} ${requestedBgId.replace(/_/g, ' ')}`
+        .toLowerCase()
+        .replace(/গুরু/g, 'গরু');
+
+      let best: HybridAssetMeta | undefined;
+      let bestScore = 0;
+      for (const asset of bgCatalog) {
+        const score = scoreAssetMatch(asset, query, reqLow);
+        if (score > bestScore) {
+          bestScore = score;
+          best = asset;
+        }
+      }
+      if (exact && !requestedDesc && bestScore <= 5) return exact;
+      if (bestScore >= 3) return best;
+      return exact;
+    };
+
+    const rawScenes = (Array.isArray(parsed.scenes) ? parsed.scenes : []).slice(0, 8);
     const scenes = [];
 
     for (let idx = 0; idx < rawScenes.length; idx++) {
@@ -1495,9 +1613,41 @@ Output JSON with:
       const bgId = typeof sc.backgroundAssetId === 'string' ? sc.backgroundAssetId.trim() : '';
       const bgDesc =
         typeof sc.backgroundDescription === 'string' ? sc.backgroundDescription.trim() : '';
-      const themeVal = typeof sc.theme === 'string' ? sc.theme.trim() : 'clear_day_sky';
+      let themeVal = typeof sc.theme === 'string' ? sc.theme.trim() : 'clear_day_sky';
       let resolvedBgId = bgId || themeVal;
       let backgroundInlineSvg: string | undefined;
+
+      const sceneTextLow = `${String(sc.captionTop || '')} ${bgDesc}`
+        .toLowerCase()
+        .replace(/গুরু/g, 'গরু');
+
+      const matchedBgAsset = pickBestBackgroundForContext(
+        `${sceneTextLow} ${rawUserScript}`,
+        resolvedBgId,
+        bgDesc
+      );
+
+      // Upgrade stick-room defaults to matching catalog background or outdoor sky when story is cartoon_2d
+      if (
+        chosenStyle === 'cartoon_2d' &&
+        (!resolvedBgId || ['room_door', 'bathroom_rush', 'bedroom_night'].includes(resolvedBgId))
+      ) {
+        if (matchedBgAsset) {
+          resolvedBgId = matchedBgAsset.id;
+          themeVal = matchedBgAsset.id;
+        } else if (hasOutdoorOrStorySetting || matchesCatalogAsset) {
+          resolvedBgId = /(ঘাস|মাঠ|meadow|field|cow|গরু|ছাগল)/.test(`${sceneTextLow} ${rawUserScript}`.toLowerCase())
+            ? 'field_meadow'
+            : 'clear_day_sky';
+          themeVal = resolvedBgId;
+        }
+      } else if (matchedBgAsset && knownAssetIds.has(matchedBgAsset.id.toLowerCase())) {
+        // Use matched uploaded/builtin catalog background when requested id isn't explicitly a brand-new environment
+        if (!bgDesc || knownAssetIds.has(resolvedBgId.toLowerCase())) {
+          resolvedBgId = matchedBgAsset.id;
+          themeVal = matchedBgAsset.id;
+        }
+      }
 
       // Auto-generate missing custom background SVG if AI requested a brand-new environment
       if (
@@ -1539,12 +1689,32 @@ Output JSON with:
       const resolvedChars = [];
       for (const ch of rawChars) {
         const nextCh = { ...ch };
-        if (nextCh.kind === 'sprite_actor') {
-          const spId =
-            typeof nextCh.spriteAssetId === 'string' ? nextCh.spriteAssetId.trim() : '';
-          const spDesc =
-            typeof nextCh.actorDescription === 'string' ? nextCh.actorDescription.trim() : '';
-          if (spId && !knownAssetIds.has(spId.toLowerCase())) {
+        nextCh.id = String(nextCh.id || 'rafu');
+        nextCh.action = String(nextCh.action || 'idle');
+        nextCh.prop = String(nextCh.prop || 'none');
+
+        const charName = String(nextCh.name || '');
+        const spId =
+          typeof nextCh.spriteAssetId === 'string' ? nextCh.spriteAssetId.trim() : '';
+        const spDesc =
+          typeof nextCh.actorDescription === 'string' ? nextCh.actorDescription.trim() : '';
+
+        // Strictly separate human_rig from sprite_actor unless the character's OWN name explicitly matches a sprite sheet
+        const nameSpriteMatch = nameMatchesSpriteCatalog(charName);
+        const shouldResolveAsSprite =
+          nextCh.kind === 'sprite_actor' ||
+          Boolean(spId) ||
+          Boolean(nameSpriteMatch);
+
+        if (shouldResolveAsSprite) {
+          const charCtx = `${spDesc} ${String(nextCh.action || '')} ${String(nextCh.speech || '')}`;
+          const matchedSprite =
+            pickBestSpriteForContext(charName, charCtx, spId) || nameSpriteMatch;
+
+          nextCh.kind = 'sprite_actor';
+          if (matchedSprite) {
+            nextCh.spriteAssetId = matchedSprite.id;
+          } else if (spId && !knownAssetIds.has(spId.toLowerCase())) {
             const cacheKey = `actor:${spId.toLowerCase()}`;
             if (autoSvgCache.has(cacheKey)) {
               const cached = autoSvgCache.get(cacheKey)!;
@@ -1573,6 +1743,9 @@ Output JSON with:
               }
             }
           }
+        } else {
+          nextCh.kind = 'human_rig';
+          delete nextCh.spriteAssetId;
         }
         delete nextCh.actorDescription;
         resolvedChars.push(nextCh);
@@ -1655,6 +1828,15 @@ const CHARACTER_VOICE_MAP: Record<
   },
 };
 
+function resolveVoicePersonaKey(characterId: string): string {
+  const key = String(characterId || '').toLowerCase();
+  if (key in CHARACTER_VOICE_MAP) return key;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  const keys = ['rafu', 'folk', 'chacha', 'friend', 'boss'];
+  return keys[hash % keys.length];
+}
+
 function stripEmojisForTts(text: string): string {
   return text
     .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')
@@ -1726,7 +1908,7 @@ async function applyVoiceFxWithFfmpeg(
       chacha: { p: 0.88, t: 0.95 },
       friend: { p: 1.09, t: 1.07 },
     };
-    const d = defaults[characterId] || { p: 1.0, t: 1.0 };
+    const d = defaults[resolveVoicePersonaKey(characterId)] || { p: 1.0, t: 1.0 };
     pitch = d.p;
     tempo = d.t;
     extraFilters =
@@ -1807,7 +1989,7 @@ async function synthesizeWithEdgeTts(
   characterId: string,
   voiceEffect: string
 ): Promise<{ buffer: Buffer; mime: string; durationSec: number }> {
-  const persona = CHARACTER_VOICE_MAP[characterId] || CHARACTER_VOICE_MAP.rafu;
+  const persona = CHARACTER_VOICE_MAP[resolveVoicePersonaKey(characterId)] || CHARACTER_VOICE_MAP.rafu;
   const tts = new MsEdgeTTS();
   await tts.setMetadata(persona.edgeVoice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
   const { audioStream } = tts.toStream(text);
@@ -1846,7 +2028,7 @@ async function synthesizeWithGeminiTts(
   characterId: string,
   voiceEffect: string
 ): Promise<{ buffer: Buffer; mime: string; durationSec: number }> {
-  const persona = CHARACTER_VOICE_MAP[characterId] || CHARACTER_VOICE_MAP.rafu;
+  const persona = CHARACTER_VOICE_MAP[resolveVoicePersonaKey(characterId)] || CHARACTER_VOICE_MAP.rafu;
   const styleHint =
     voiceEffect === 'dramatic_boss'
       ? 'Loud, roaring, furious dramatic movie villain shouting in Bangladeshi Bengali with heavy intensity'
