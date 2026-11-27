@@ -748,7 +748,7 @@ export function VideoStudioView({
                   rows={6}
                   value={customScript}
                   onChange={(e) => setCustomScript(e.target.value)}
-                  placeholder={`আপনার আপলোড করা স্প্রাইট চরিত্র ও পটভূমি অনুযায়ী যেকোনো গল্প লিখুন...\n\nউদাহরণ:\nসবুজ মাঠে গরু ঘাস খাচ্ছে।\nহঠাৎ কুকুর দৌড়ে এসে ঘেউ ঘেউ করে ভয় দেখাল!\nগরু (রাগ হয়ে): হাম্বাআআ! আজ তোর খবর আছে!`}
+                  placeholder={`আপনার স্প্রাইট চরিত্র (গরু, বাঘ, রফু/রাফু) ও পটভূমি অনুযায়ী যেকোনো গল্প লিখুন...\n\nউদাহরণ:\nসবুজ মাঠে রফু হাঁটছে আর গরু আরামে ঘাস খাচ্ছে।\nহঠাৎ জঙ্গল থেকে বাঘ হালুম করে হাঁটতে হাঁটতে সামনে এলো!\nরফু ভয় পেয়ে চিৎকার করে দৌড়ে পালাল, আর গরু রেগে বাঘকে তাড়া করল!`}
                   className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none"
                 />
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
@@ -760,7 +760,7 @@ export function VideoStudioView({
                       type="button"
                       onClick={() =>
                         setCustomScript(
-                          'সবুজ মাঠে গরু আরামে ঘাস খাচ্ছে।\nহঠাৎ দুষ্টু কুকুর দৌড়ে এসে ভয় দেখাল: ঘেউ ঘেউ! পালা এখান থেকে!\nগরু (রেগে): হাম্বাআআ! আমার মাঠে এসে দাদাগিরি?\nগরু তেড়ে আসতেই কুকুর ভয় পেয়ে লেজ গুটিয়ে পর্দার বাইরে পালিয়ে গেল।'
+                          'সবুজ মাঠে রফু মনের আনন্দে হাঁটছে আর গরু ঘাস খাচ্ছে।\nহঠাৎ বাঘ হালুম করে সামনে এসে গর্জন করল!\nরফু (ভয়ে): ওরে বাবা রে! বাঘ এসেছে, বাঁচাও!\nবাঘ তাড়া করতেই রফু দৌড়ে পালাল, আর সাহসী গরু রেগে হাম্বা বলে বাঘকে গুতো দিতে তেড়ে এলো!'
                         )
                       }
                       className="font-semibold text-slate-700 underline underline-offset-2 hover:text-slate-900 whitespace-nowrap"

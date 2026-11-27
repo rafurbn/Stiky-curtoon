@@ -126,7 +126,7 @@ function SpritePreviewCanvas({ asset, animate = true }: SpritePreviewCanvasProps
       }
     };
 
-    loadImageFromUrl(asset.url).then((img) => {
+    loadImageFromUrl(asset.url, asset).then((img) => {
       if (cancelled) return;
       loadedImg = img;
       drawFrame();
@@ -337,7 +337,7 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
             হাইব্রিড স্প্রাইট ও ব্যাকগ্রাউন্ড লাইব্রেরি
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            দেশীয় পরিবেশ, গরু-কুকুর-রিকশা ৪-ফ্রেম স্প্রাইট শিট, নিজস্ব SVG/PNG আপলোড এবং ফ্রি AI জেনারেটর
+            দেশীয় পরিবেশ, গরু-বাঘ-রফু ৮-ফ্রেম (৪x২) ও ৪-ফ্রেম স্প্রাইট শিট, নিজস্ব SVG/PNG আপলোড এবং ফ্রি AI জেনারেটর
           </p>
         </div>
 
