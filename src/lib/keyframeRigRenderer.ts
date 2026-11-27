@@ -8,6 +8,7 @@ import type {
   VideoCharacterState,
 } from '../types/comic';
 import type { LipSyncSample } from './lipSyncAnalyzer';
+import { getSpriteSheetMetrics } from './hybridSpriteCatalog';
 
 export interface InterpolatedPose {
   x: number;
@@ -457,11 +458,34 @@ export function drawSpriteSheetActor(
     }
   }
 
+  const isFlyingBird = asset?.id === 'crow' || actionStr.includes('fly');
+  const metrics = getSpriteSheetMetrics(img);
+  let footBottomRatio = rows >= 2 ? 0.89 : 0.94;
+  if (isFlyingBird) {
+    footBottomRatio = 0.85;
+  } else if (metrics && metrics.cellBottomRatios.length > 0) {
+    const span = metrics.maxBottomRatio - metrics.minBottomRatio;
+    footBottomRatio =
+      span <= 0.045
+        ? metrics.cellBottomRatios[frameIdx % metrics.cellBottomRatios.length]
+        : metrics.maxBottomRatio;
+  }
+
+  const footSeatPx = isFlyingBird ? 0 : 7 * totalScale;
+
   ctx.save();
-  // Ground contact shadow
+  // Ground contact shadow aligned directly under hooves/shoes
   ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
   ctx.beginPath();
-  ctx.ellipse(worldX, groundY + 4, Math.min(115 * totalScale, drawW * 0.34), 12 * totalScale, 0, 0, Math.PI * 2);
+  ctx.ellipse(
+    worldX,
+    groundY + footSeatPx,
+    Math.min(115 * totalScale, drawW * 0.34),
+    12 * totalScale,
+    0,
+    0,
+    Math.PI * 2
+  );
   ctx.fill();
 
   // Subtle walk bounce (keep smaller on 8-frame sheets where stride height is already animated in the frames)
@@ -469,7 +493,7 @@ export function drawSpriteSheetActor(
     ? Math.abs(Math.sin(globalT * 10)) * (isMultiFrameSheet ? 2.5 : 6)
     : 0;
 
-  ctx.translate(worldX, worldY - drawH / 2 - walkBounce);
+  ctx.translate(worldX, worldY + footSeatPx - drawH * (footBottomRatio - 0.5) - walkBounce);
   ctx.rotate((pose.rotationDeg * Math.PI) / 180);
   ctx.scale(dir, 1);
 
@@ -478,7 +502,6 @@ export function drawSpriteSheetActor(
     const cellH = img.naturalHeight / rows;
     const col = frameIdx % cols;
     const row = Math.floor(frameIdx / cols) % rows;
-    const groundPadOffset = (rows >= 2 ? 18 : 10) * totalScale;
     ctx.drawImage(
       img,
       col * cellW,
@@ -486,7 +509,7 @@ export function drawSpriteSheetActor(
       cellW,
       cellH,
       -drawW / 2,
-      -drawH / 2 + groundPadOffset,
+      -drawH / 2,
       drawW,
       drawH
     );

@@ -148,13 +148,13 @@ export const BUILTIN_HYBRID_ASSETS: HybridAssetItem[] = [
     fps: 10,
   },
   {
-    id: 'boy_scared',
+    id: 'rafu_scared',
     name: 'রাফু / ছেলে ভয় পেয়েছে (৮-ফ্রেম স্প্রাইট)',
-    keywords: ['ভয়', 'চমকে', 'আতঙ্ক', 'কান্না', 'ভীত', 'ছেলে ভয়', 'রাফু ভয়', 'রফু ভয়', 'boy scared', 'scared', 'shocked', 'afraid', 'panicked', 'crying', 'rafu'],
+    keywords: ['ভয়', 'চমকে', 'আতঙ্ক', 'কান্না', 'ভীত', 'ছেলে ভয়', 'রাফু ভয়', 'রফু ভয়', 'rafu scared', 'boy scared', 'scared', 'shocked', 'afraid', 'panicked', 'crying', 'rafu'],
     category: 'sprite_actor',
     format: 'svg_spritesheet',
     source: 'builtin',
-    url: '/assets/actors/boy_scared.svg',
+    url: '/assets/actors/rafu_scared.svg',
     cols: 4,
     rows: 2,
     frameCount: 8,
@@ -266,10 +266,26 @@ export const BUILTIN_HYBRID_ASSETS: HybridAssetItem[] = [
   },
 ];
 
+export interface SpriteSheetMetrics {
+  cols: number;
+  rows: number;
+  cellBottomRatios: number[];
+  maxBottomRatio: number;
+  minBottomRatio: number;
+}
+
 let cachedCatalog: HybridAssetItem[] = [...BUILTIN_HYBRID_ASSETS];
 const imageCache = new Map<string, HTMLImageElement>();
+const spriteMetricsByImg = new WeakMap<HTMLImageElement, SpriteSheetMetrics>();
 const fallbackDataUrlByAssetUrl = new Map<string, string>();
 const pendingLoads = new Map<string, Promise<HTMLImageElement | null>>();
+
+export function getSpriteSheetMetrics(
+  img: HTMLImageElement | null | undefined
+): SpriteSheetMetrics | undefined {
+  if (!img) return undefined;
+  return spriteMetricsByImg.get(img);
+}
 
 export function getCachedAssetCatalog(): HybridAssetItem[] {
   return cachedCatalog;
@@ -355,7 +371,8 @@ export async function refreshAssetCatalog(): Promise<HybridAssetItem[]> {
 
 export function findAssetByIdOrTheme(idOrTheme?: string): HybridAssetItem | undefined {
   if (!idOrTheme) return undefined;
-  const normalized = idOrTheme.trim().toLowerCase();
+  let normalized = idOrTheme.trim().toLowerCase();
+  if (normalized === 'boy_scared') normalized = 'rafu_scared';
   return cachedCatalog.find((a) => a.id.toLowerCase() === normalized);
 }
 
@@ -377,6 +394,59 @@ function isNearWhitePixel(data: Uint8ClampedArray, idx4: number, minLum = 212): 
   const maxC = r > g ? (r > b ? r : b) : g > b ? g : b;
   const minC = r < g ? (r < b ? r : b) : g < b ? g : b;
   return minC >= minLum && maxC - minC <= 26;
+}
+
+function measureCellBottomMetrics(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+  cols: number,
+  rows: number
+): SpriteSheetMetrics {
+  const safeCols = Math.max(1, cols);
+  const safeRows = Math.max(1, rows);
+  const cellBottomRatios: number[] = [];
+  let maxBottomRatio = 0;
+  let minBottomRatio = 1;
+
+  for (let r = 0; r < safeRows; r++) {
+    const y0 = Math.floor((r * h) / safeRows);
+    const y1 = Math.floor(((r + 1) * h) / safeRows);
+    const cellH = Math.max(1, y1 - y0);
+    for (let c = 0; c < safeCols; c++) {
+      const x0 = Math.floor((c * w) / safeCols);
+      const x1 = Math.floor(((c + 1) * w) / safeCols);
+
+      let bottomY = -1;
+      for (let py = y1 - 2; py >= y0 + 2; py--) {
+        let opaqueCount = 0;
+        const rowOffset = py * w;
+        for (let px = x0 + 2; px < x1 - 2; px++) {
+          if (data[(rowOffset + px) * 4 + 3] >= 80) {
+            opaqueCount++;
+            if (opaqueCount >= 2) {
+              bottomY = py;
+              break;
+            }
+          }
+        }
+        if (bottomY !== -1) break;
+      }
+
+      const ratio = bottomY !== -1 ? (bottomY - y0 + 1) / cellH : 0.94;
+      cellBottomRatios.push(ratio);
+      if (ratio > maxBottomRatio) maxBottomRatio = ratio;
+      if (ratio < minBottomRatio) minBottomRatio = ratio;
+    }
+  }
+
+  return {
+    cols: safeCols,
+    rows: safeRows,
+    cellBottomRatios,
+    maxBottomRatio: maxBottomRatio || 0.94,
+    minBottomRatio: minBottomRatio <= 1 ? minBottomRatio : 0.94,
+  };
 }
 
 function cleanOpaqueSpriteSheetWhiteBg(
@@ -416,6 +486,7 @@ function cleanOpaqueSpriteSheetWhiteBg(
       }
     }
     if (opaqueWhiteCorners === 0) {
+      spriteMetricsByImg.set(img, measureCellBottomMetrics(data, w, h, cols, rows));
       return Promise.resolve(img);
     }
 
@@ -518,12 +589,19 @@ function cleanOpaqueSpriteSheetWhiteBg(
       }
     }
 
+    const metrics = measureCellBottomMetrics(data, w, h, safeCols, safeRows);
     ctx.putImageData(imgData, 0, 0);
     const pngDataUrl = canvas.toDataURL('image/png');
     return new Promise<HTMLImageElement>((resolve) => {
       const cleaned = new Image();
-      cleaned.onload = () => resolve(cleaned);
-      cleaned.onerror = () => resolve(img);
+      cleaned.onload = () => {
+        spriteMetricsByImg.set(cleaned, metrics);
+        resolve(cleaned);
+      };
+      cleaned.onerror = () => {
+        spriteMetricsByImg.set(img, metrics);
+        resolve(img);
+      };
       cleaned.src = pngDataUrl;
     });
   } catch {
@@ -547,10 +625,15 @@ export function loadImageFromUrl(
     metaHint || cachedCatalog.find((a) => a.url === url || `/api/assets/file/${a.id}` === url);
 
   const finalizeLoaded = async (loaded: HTMLImageElement): Promise<HTMLImageElement> => {
-    const isLikely4x2 = loaded.naturalWidth === 1408 && loaded.naturalHeight === 768;
+    const ratio = loaded.naturalHeight > 0 ? loaded.naturalWidth / loaded.naturalHeight : 0;
+    const isLikely4x2 =
+      loaded.naturalWidth >= 1100 &&
+      loaded.naturalHeight >= 550 &&
+      ratio >= 1.55 &&
+      ratio <= 2.15;
     const isSprite = catalogMatch?.category === 'sprite_actor' || isLikely4x2;
     if (isSprite && catalogMatch?.category !== 'background') {
-      const cols = Math.max(1, catalogMatch?.cols || (isLikely4x2 ? 4 : 4));
+      const cols = Math.max(1, catalogMatch?.cols || 4);
       const rows = Math.max(1, catalogMatch?.rows || (isLikely4x2 ? 2 : 1));
       return cleanOpaqueSpriteSheetWhiteBg(loaded, cols, rows);
     }
@@ -757,6 +840,7 @@ export function selectActionAwareSpriteId(
       return 'rafu_running_away';
     }
     if (
+      spIdLow === 'rafu_scared' ||
       spIdLow === 'boy_scared' ||
       ['shocked', 'crying', 'exhausted', 'confused'].includes(expLow) ||
       isActionMatch(
@@ -764,7 +848,7 @@ export function selectActionAwareSpriteId(
         /(scared|shocked|afraid|fear|panick|scream|jump|cry|ভয়|আতঙ্ক|চমক|কান্না|ওরে|বাঁচাও)/
       )
     ) {
-      return 'boy_scared';
+      return 'rafu_scared';
     }
     return 'rafu_walk_talk';
   }

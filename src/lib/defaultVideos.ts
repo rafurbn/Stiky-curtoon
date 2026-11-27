@@ -143,7 +143,7 @@ export const STARTER_VIDEOS: VideoItem[] = [
             id: 'rafu',
             name: 'রাফু',
             kind: 'sprite_actor',
-            spriteAssetId: 'boy_scared',
+            spriteAssetId: 'rafu_scared',
             side: 'left',
             expression: 'shocked',
             action: 'scared',
