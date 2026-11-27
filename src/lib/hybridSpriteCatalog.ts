@@ -1,4 +1,5 @@
 import type { HybridAssetItem, VideoCharacterState, VideoScript } from '../types/comic';
+import { loadCustomAssetsFromVault } from './videoStorage';
 
 export const BUILTIN_HYBRID_ASSETS: HybridAssetItem[] = [
   {
@@ -58,7 +59,7 @@ export const BUILTIN_HYBRID_ASSETS: HybridAssetItem[] = [
   {
     id: 'cow',
     name: 'দেশি গরু (৪-ফ্রেম স্প্রাইট)',
-    keywords: ['গরু', 'গাভী', 'ষাঁড়', 'গুতো', 'বাছুর', 'cow', 'bull', 'cattle'],
+    keywords: ['গরু', 'গুরু', 'গাভী', 'ষাঁড়', 'গুতো', 'বাছুর', 'ঘাস', 'হাম্বা', 'cow', 'bull', 'cattle'],
     category: 'sprite_actor',
     format: 'svg_spritesheet',
     source: 'builtin',
@@ -163,10 +164,37 @@ export const BUILTIN_HYBRID_ASSETS: HybridAssetItem[] = [
 
 let cachedCatalog: HybridAssetItem[] = [...BUILTIN_HYBRID_ASSETS];
 const imageCache = new Map<string, HTMLImageElement>();
+const fallbackDataUrlByAssetUrl = new Map<string, string>();
 const pendingLoads = new Map<string, Promise<HTMLImageElement | null>>();
 
 export function getCachedAssetCatalog(): HybridAssetItem[] {
   return cachedCatalog;
+}
+
+export function getClientCustomAssetSummaries(): Array<{
+  id: string;
+  name: string;
+  keywords: string[];
+  category: HybridAssetItem['category'];
+  format: HybridAssetItem['format'];
+  cols?: number;
+  rows?: number;
+  frameCount?: number;
+  fps?: number;
+}> {
+  return cachedCatalog
+    .filter((a) => a.source !== 'builtin')
+    .map((a) => ({
+      id: a.id,
+      name: a.name,
+      keywords: a.keywords,
+      category: a.category,
+      format: a.format,
+      cols: a.cols,
+      rows: a.rows,
+      frameCount: a.frameCount,
+      fps: a.fps,
+    }));
 }
 
 export function setCachedAssetCatalog(items: HybridAssetItem[]) {
@@ -177,17 +205,47 @@ export function setCachedAssetCatalog(items: HybridAssetItem[]) {
 }
 
 export async function refreshAssetCatalog(): Promise<HybridAssetItem[]> {
+  let serverAssets: HybridAssetItem[] = [];
   try {
     const res = await fetch('/api/assets');
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.assets)) {
-        setCachedAssetCatalog(data.assets);
+        serverAssets = data.assets;
       }
     }
   } catch {
-    // Keep builtin catalog fallback offline
+    // Keep offline fallback
   }
+
+  const vaultRecords = await loadCustomAssetsFromVault().catch(() => []);
+  const byId = new Map<string, HybridAssetItem>();
+  for (const b of BUILTIN_HYBRID_ASSETS) byId.set(b.id, b);
+
+  // Register IndexedDB backups first (in case Render free disk slept/reset)
+  for (const rec of vaultRecords) {
+    if (!rec?.asset?.id) continue;
+    if (rec.dataUrl) {
+      fallbackDataUrlByAssetUrl.set(rec.asset.url, rec.dataUrl);
+      fallbackDataUrlByAssetUrl.set(rec.asset.id, rec.dataUrl);
+    }
+    byId.set(rec.asset.id, {
+      ...rec.asset,
+      url: rec.dataUrl || rec.asset.url,
+    });
+  }
+
+  // Merge server assets (preferring server URL if available, while keeping vault dataUrl fallback)
+  for (const sa of serverAssets) {
+    if (!sa?.id) continue;
+    const vaultBackup = fallbackDataUrlByAssetUrl.get(sa.id);
+    if (vaultBackup && sa.url) {
+      fallbackDataUrlByAssetUrl.set(sa.url, vaultBackup);
+    }
+    byId.set(sa.id, sa);
+  }
+
+  cachedCatalog = Array.from(byId.values());
   return cachedCatalog;
 }
 
@@ -224,6 +282,21 @@ export function loadImageFromUrl(url: string): Promise<HTMLImageElement | null> 
       resolve(img);
     };
     img.onerror = () => {
+      const backup = fallbackDataUrlByAssetUrl.get(url);
+      if (backup && backup !== url) {
+        const retryImg = new Image();
+        retryImg.onload = () => {
+          imageCache.set(url, retryImg);
+          pendingLoads.delete(url);
+          resolve(retryImg);
+        };
+        retryImg.onerror = () => {
+          pendingLoads.delete(url);
+          resolve(null);
+        };
+        retryImg.src = backup;
+        return;
+      }
       pendingLoads.delete(url);
       resolve(null);
     };
@@ -238,7 +311,6 @@ export function getLoadedImageSync(url?: string): HTMLImageElement | null {
   if (!url) return null;
   const img = imageCache.get(url);
   if (img && img.complete && img.naturalWidth > 0) return img;
-  // Trigger lazy background load if not started yet
   if (!pendingLoads.has(url)) {
     void loadImageFromUrl(url);
   }
@@ -294,11 +366,9 @@ export async function preloadScriptAssets(script: VideoScript): Promise<void> {
       }
     }
     for (const ch of sc.characters) {
-      if (ch.spriteAssetId) {
-        const actorAsset = findAssetByIdOrTheme(ch.spriteAssetId);
-        if (actorAsset?.url) {
-          tasks.push(loadImageFromUrl(actorAsset.url));
-        }
+      const actorAsset = resolveSpriteAssetForCharacter(ch, sc.captionTop);
+      if (actorAsset?.url) {
+        tasks.push(loadImageFromUrl(actorAsset.url));
       }
       if (ch.inlineSvg) {
         const key = getInlineSvgDataUrl(ch.inlineSvg);
@@ -313,20 +383,57 @@ export async function preloadScriptAssets(script: VideoScript): Promise<void> {
 }
 
 export function resolveSpriteAssetForCharacter(
-  char: VideoCharacterState
+  char: VideoCharacterState,
+  sceneContext = ''
 ): HybridAssetItem | undefined {
+  // Humans rendered with articulated rig must NEVER be hijacked into animal/vehicle sprites via speech/captions
+  if (char.kind === 'human_rig') {
+    return undefined;
+  }
+
   if (char.spriteAssetId) {
     const exact = findAssetByIdOrTheme(char.spriteAssetId);
     if (exact) return exact;
   }
-  if (char.kind === 'sprite_actor') {
-    const nameLower = (char.name || '').toLowerCase();
-    return cachedCatalog.find(
-      (a) =>
-        a.category === 'sprite_actor' &&
-        (a.name.toLowerCase().includes(nameLower) ||
-          a.keywords.some((kw) => nameLower.includes(kw.toLowerCase())))
-    );
+
+  const hay =
+    char.kind === 'sprite_actor'
+      ? `${char.name || ''} ${char.speech || ''} ${sceneContext || ''}`
+          .toLowerCase()
+          .replace(/গুরু/g, 'গরু')
+      : `${char.name || ''}`.toLowerCase().replace(/গুরু/g, 'গরু');
+
+  if (!hay.trim()) return undefined;
+
+  const spriteActors = cachedCatalog.filter((a) => a.category === 'sprite_actor');
+  let best: HybridAssetItem | undefined;
+  let bestScore = 0;
+
+  for (const asset of spriteActors) {
+    let score = 0;
+    const nameLower = asset.name.toLowerCase().replace(/গুরু/g, 'গরু');
+    const idLower = asset.id.toLowerCase();
+    const charNameLow = (char.name || '').toLowerCase().replace(/গুরু/g, 'গরু').trim();
+
+    if (charNameLow && (nameLower.includes(charNameLow) || idLower === charNameLow)) {
+      score += 6;
+    }
+    for (const kw of asset.keywords) {
+      const k = kw.toLowerCase().replace(/গুরু/g, 'গরু').trim();
+      if (k && hay.includes(k)) {
+        score += asset.source === 'builtin' ? 3 : 6;
+      }
+    }
+    for (const word of nameLower.split(/[\s,_\-()]+/)) {
+      if (word.length >= 2 && hay.includes(word)) {
+        score += asset.source === 'builtin' ? 2 : 4;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = asset;
+    }
   }
-  return undefined;
+
+  return bestScore > 0 ? best : undefined;
 }
