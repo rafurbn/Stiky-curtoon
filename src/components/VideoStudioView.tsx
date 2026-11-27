@@ -25,12 +25,10 @@ import type {
   HybridAssetItem,
   OutfitStyle,
   SavedRenderedVideo,
-  VideoAction,
   VideoAspectRatio,
   VideoCamera,
   VideoItem,
   VideoMusicStyle,
-  VideoProp,
   VideoRenderStyle,
   VideoScene,
   VideoSfx,
@@ -49,9 +47,12 @@ import {
   type RenderedVideoResult,
 } from '../lib/videoRenderer';
 import {
+  findAssetByIdOrTheme,
   getCachedAssetCatalog,
+  getClientCustomAssetSummaries,
   preloadScriptAssets,
   refreshAssetCatalog,
+  resolveSpriteAssetForCharacter,
 } from '../lib/hybridSpriteCatalog';
 import { startVideoAudioSession, type AudioSession } from '../lib/videoAudioEngine';
 import { prepareLipSyncForScript } from '../lib/lipSyncAnalyzer';
@@ -74,22 +75,13 @@ interface VideoStudioViewProps {
   ) => Promise<void>;
 }
 
-const THEME_OPTIONS: Array<{ value: VideoTheme; label: string }> = [
-  { value: 'clear_day_sky', label: 'পরিষ্কার আকাশ ও মাঠ (হাইব্রিড)' },
-  { value: 'village_road', label: 'গ্রামীণ মেঠো রাস্তা (হাইব্রিড)' },
-  { value: 'bazar_street', label: 'হাট-বাজার ও দোকান (হাইব্রিড)' },
-  { value: 'river_ghat', label: 'নদীর ঘাট ও নৌকা (হাইব্রিড)' },
-  { value: 'field_meadow', label: 'সবুজ খোলা মাঠ (হাইব্রিড)' },
-  { value: 'tea_stall_day', label: 'দিনের টং চা-স্টল (হাইব্রিড)' },
-  { value: 'room_door', label: 'ঘরের দরজা ও করিডোর' },
-  { value: 'bathroom_rush', label: 'বাথরুম ও টয়লেট' },
-  { value: 'bedroom_night', label: 'রাতের রুম' },
-  { value: 'exam_hall', label: 'পরীক্ষার হল' },
+const PROCEDURAL_THEME_OPTIONS: Array<{ value: VideoTheme; label: string }> = [
   { value: 'tea_stall', label: 'চা-দোকান (রঙিন)' },
-  { value: 'office_drama', label: 'অফিস ও বস' },
   { value: 'rain_storm', label: 'বৃষ্টি ও বজ্রপাত' },
   { value: 'desert_sun', label: 'রোদ ও মরুভূমি' },
+  { value: 'office_drama', label: 'অফিস' },
   { value: 'street_night', label: 'রাতের রাস্তা' },
+  { value: 'room_door', label: 'ঘরের ভেতর' },
 ];
 
 const OUTFIT_OPTIONS: Array<{ value: OutfitStyle; label: string }> = [
@@ -111,57 +103,25 @@ const CAMERA_OPTIONS: Array<{ value: VideoCamera; label: string }> = [
 ];
 
 const SFX_OPTIONS: Array<{ value: VideoSfx; label: string }> = [
-  { value: 'knock_door', label: 'দরজায় কড়া নাড়া' },
+  { value: 'pop', label: 'বাবল পপ' },
   { value: 'dramatic_boom', label: 'ড্রামাটিক বুম' },
-  { value: 'scream_sting', label: 'চিৎকার স্টিং' },
-  { value: 'door_creak', label: 'দরজা খোলা' },
-  { value: 'splat_funny', label: 'ফানি স্প্ল্যাট' },
+  { value: 'punchline', label: 'পাঞ্চলাইন হিট' },
   { value: 'laugh', label: 'হাসি' },
   { value: 'gasp', label: 'চমকানো গ্যাস্প' },
+  { value: 'scream_sting', label: 'চিৎকার স্টিং' },
+  { value: 'splat_funny', label: 'ফানি স্প্ল্যাট' },
   { value: 'thunder', label: 'বজ্রপাত' },
   { value: 'pour', label: 'পানি ঢালা' },
-  { value: 'punchline', label: 'পাঞ্চলাইন হিট' },
-  { value: 'pop', label: 'বাবল পপ' },
+  { value: 'knock_door', label: 'কড়া নাড়া' },
+  { value: 'door_creak', label: 'দরজা খোলা' },
   { value: 'sad_trombone', label: 'স্যাড ট্রম্বোন' },
   { value: 'none', label: 'সাউন্ড ছাড়া' },
 ];
 
-const ACTION_OPTIONS: Array<{ value: VideoAction; label: string }> = [
-  { value: 'idle', label: 'দাঁড়িয়ে থাকা' },
-  { value: 'walk_in', label: 'হেঁটে আসা' },
-  { value: 'run', label: 'দৌড়ানো' },
-  { value: 'charge_butt', label: 'তেড়ে এসে গুতো' },
-  { value: 'knock_door', label: 'দরজা ধাক্কানো' },
-  { value: 'desperate_squeeze', label: 'চেপে ধরে কাঁপা' },
-  { value: 'scream_jaw', label: 'মুখ খুলে চিৎকার' },
-  { value: 'dramatic_closeup', label: 'হিরো/ভিলেন ক্লোজ-আপ' },
-  { value: 'door_peek', label: 'দরজা খুলে উঁকি' },
-  { value: 'collapsed_mess', label: 'মাটিতে বসে পড়া' },
-  { value: 'laugh', label: 'হাসা' },
-  { value: 'point_laugh', label: 'আঙুল তুলে হাসা' },
-  { value: 'panting', label: 'হাঁপানো' },
-  { value: 'shocked_jump', label: 'চমকে লাফ' },
-  { value: 'eye_pop', label: 'চোখ বেরিয়ে আসা' },
-  { value: 'facepalm', label: 'মাথায় হাত' },
-  { value: 'hands_up', label: 'হাত তোলা' },
-];
-
-const PROP_OPTIONS: Array<{ value: VideoProp; label: string }> = [
-  { value: 'none', label: 'কিছু নেই' },
-  { value: 'door_closed', label: 'বন্ধ দরজা' },
-  { value: 'door_open', label: 'খোলা দরজা' },
-  { value: 'toilet_squat', label: 'টয়লেট প্যান' },
-  { value: 'splat_mess', label: 'মেঝেতে দাগ' },
-  { value: 'tea_cup', label: 'চায়ের কাপ' },
-  { value: 'smartphone', label: 'স্মার্টফোন' },
-  { value: 'money', label: 'টাকার নোট' },
-  { value: 'clock', label: 'ঘড়ি' },
-];
-
 const VOICE_EFFECT_OPTIONS: Array<{ value: VoiceEffectPreset; label: string }> = [
-  { value: 'normal', label: 'স্বাভাবিক' },
-  { value: 'panicked', label: 'আতঙ্কিত চেঁচামেচি' },
-  { value: 'dramatic_boss', label: 'সিনেমার ভারী ভয়েস' },
+  { value: 'normal', label: 'স্বাভাবিক ভয়েস' },
+  { value: 'panicked', label: 'আতঙ্কিত / চেঁচামেচি' },
+  { value: 'dramatic_boss', label: 'ভারী নাটকীয় ভয়েস' },
   { value: 'cartoon_high', label: 'কার্টুন চিকন ভয়েস' },
 ];
 
@@ -432,6 +392,8 @@ export function VideoStudioView({
     setLastRendered(null);
 
     try {
+      await refreshAssetCatalog().catch(() => {});
+      const clientCustomAssets = getClientCustomAssetSummaries();
       const res = await fetch('/api/generate-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -443,6 +405,7 @@ export function VideoStudioView({
           aspectRatio,
           dialogueMode: 'bangla',
           recentTitles: videos.slice(0, 8).map((v) => v.title),
+          clientCustomAssets,
         }),
       });
       const data = await res.json();
@@ -785,19 +748,19 @@ export function VideoStudioView({
                   rows={6}
                   value={customScript}
                   onChange={(e) => setCustomScript(e.target.value)}
-                  placeholder={`আপনার গল্প বা সংলাপ নিজের মতো লিখুন...\n\nউদাহরণ:\nরাফু (চিৎকার করে): ভাই জলদি দরজা খোল, আর পারছি না!\nফোক (হেসে): আগে বল বিরিয়ানি কে খাওয়াবে?\nরাফু (রাগ হয়ে): আজ তো তোর খবর আছে!`}
+                  placeholder={`আপনার আপলোড করা স্প্রাইট চরিত্র ও পটভূমি অনুযায়ী যেকোনো গল্প লিখুন...\n\nউদাহরণ:\nসবুজ মাঠে গরু ঘাস খাচ্ছে।\nহঠাৎ কুকুর দৌড়ে এসে ঘেউ ঘেউ করে ভয় দেখাল!\nগরু (রাগ হয়ে): হাম্বাআআ! আজ তোর খবর আছে!`}
                   className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none"
                 />
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
                   <span>
-                    শুধু গল্প বা সংলাপ লিখলেই হবে — দৃশ্য, ক্যামেরা, ভয়েস ও লিপসিংক AI নিজেই করবে
+                    যেকোনো গল্প ও পটভূমি লিখুন — AI স্প্রাইট, দৃশ্য, ক্যামেরা ও ভয়েস স্বাধীনভাবে সাজিয়ে নেবে
                   </span>
                   {!customScript.trim() && (
                     <button
                       type="button"
                       onClick={() =>
                         setCustomScript(
-                          'রাফু (হাঁপাতে হাঁপাতে): ভাই দোস্ত, পকেটে ৫০০ টাকা দে তো, কাল ফেরত দিব।\nফোক (অবাক হয়ে): কী বলিস! আগের ২ হাজার টাকাই তো দিস নাই!\nরাফু (নাটকীয়ভাবে): আরে বন্ধু, টাকা আসে যায়, বন্ধুত্বই আসল!\nফোক (চিৎকার করে): ভাগ এখান থেকে!'
+                          'সবুজ মাঠে গরু আরামে ঘাস খাচ্ছে।\nহঠাৎ দুষ্টু কুকুর দৌড়ে এসে ভয় দেখাল: ঘেউ ঘেউ! পালা এখান থেকে!\nগরু (রেগে): হাম্বাআআ! আমার মাঠে এসে দাদাগিরি?\nগরু তেড়ে আসতেই কুকুর ভয় পেয়ে লেজ গুটিয়ে পর্দার বাইরে পালিয়ে গেল।'
                         )
                       }
                       className="font-semibold text-slate-700 underline underline-offset-2 hover:text-slate-900 whitespace-nowrap"
@@ -813,12 +776,92 @@ export function VideoStudioView({
                   type="text"
                   value={customHint}
                   onChange={(e) => setCustomHint(e.target.value)}
-                  placeholder="চাইলে ১ লাইনে গল্পের আইডিয়া দিন (খালি রাখলে AI নিজেই নতুন মজার গল্প লিখবে)"
+                  placeholder="চাইলে ১ লাইনে গল্পের আইডিয়া দিন (খালি রাখলে AI নিজেই স্প্রাইট চরিত্র নিয়ে নতুন গল্প লিখবে)"
                   className="w-full rounded-lg border border-slate-300 px-3.5 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none"
                 />
                 <p className="text-xs text-slate-500">
-                  AI স্বাধীনভাবে দৃশ্যের সংখ্যা, চরিত্র, পরিবেশ, সাউন্ড ও ডাবিং ঠিক করে নেবে
+                  AI স্বাধীনভাবে দৃশ্যের সংখ্যা, স্প্রাইট চরিত্র, ব্যাকগ্রাউন্ড ও ডাবিং সাজাবে
                 </p>
+              </div>
+            )}
+
+            {/* Available Sprite Sheets & Backgrounds Helper */}
+            {hybridAssets.length > 0 && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="font-semibold text-slate-800">
+                    স্টুডিওতে যুক্ত স্প্রাইট শিট ও ব্যাকগ্রাউন্ড
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    নামে ক্লিক করলে স্ক্রিপ্টে যুক্ত হবে
+                  </span>
+                </div>
+
+                {hybridAssets.some((a) => a.category === 'sprite_actor') && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-slate-500 mr-1">
+                      স্প্রাইট চরিত্র:
+                    </span>
+                    {hybridAssets
+                      .filter((a) => a.category === 'sprite_actor')
+                      .map((a) => {
+                        const shortLabel = a.name.replace(/\s*\(.*?\)\s*/g, '').trim() || a.id;
+                        return (
+                          <button
+                            key={a.id}
+                            type="button"
+                            onClick={() => {
+                              if (creationMode === 'custom_script') {
+                                setCustomScript((prev) =>
+                                  prev.trim() ? `${prev.trimEnd()} ${shortLabel}` : shortLabel
+                                );
+                              } else {
+                                setCustomHint((prev) =>
+                                  prev.trim() ? `${prev.trimEnd()} ${shortLabel}` : shortLabel
+                                );
+                              }
+                            }}
+                            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:border-slate-400 hover:text-slate-900 whitespace-nowrap"
+                          >
+                            {shortLabel}
+                          </button>
+                        );
+                      })}
+                  </div>
+                )}
+
+                {hybridAssets.some((a) => a.category === 'background') && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-slate-500 mr-1">
+                      ব্যাকগ্রাউন্ড:
+                    </span>
+                    {hybridAssets
+                      .filter((a) => a.category === 'background')
+                      .map((a) => {
+                        const shortLabel = a.name.replace(/\s*\(.*?\)\s*/g, '').trim() || a.id;
+                        return (
+                          <button
+                            key={a.id}
+                            type="button"
+                            onClick={() => {
+                              if (creationMode === 'custom_script') {
+                                setCustomScript((prev) =>
+                                  prev.trim() ? `${prev.trimEnd()} (${shortLabel})` : shortLabel
+                                );
+                              } else {
+                                setCustomHint((prev) =>
+                                  prev.trim() ? `${prev.trimEnd()} (${shortLabel})` : shortLabel
+                                );
+                              }
+                            }}
+                            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:border-slate-400 hover:text-slate-900 whitespace-nowrap"
+                          >
+                            {shortLabel}
+                          </button>
+                        );
+                      })}
+                  </div>
+                )}
               </div>
             )}
 
@@ -914,7 +957,7 @@ export function VideoStudioView({
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 whitespace-nowrap"
                 >
                   <SlidersHorizontal className="h-3.5 w-3.5" />
-                  <span>{showAdvancedEditor ? 'সাধারণ ভিউ' : 'অ্যাডভান্সড'}</span>
+                  <span>{showAdvancedEditor ? 'সাধারণ ভিউ' : 'দৃশ্য টিউনিং'}</span>
                   {showAdvancedEditor ? (
                     <ChevronUp className="h-3.5 w-3.5" />
                   ) : (
@@ -991,17 +1034,41 @@ export function VideoStudioView({
             <div className="mt-4 divide-y divide-slate-100 rounded-lg border border-slate-200">
               {video.scenes.map((sc, sIdx) => {
                 const isActivePlaying = isPlaying && currentSceneInfo.sceneIndex === sIdx;
+                const bgAsset = findAssetByIdOrTheme(sc.backgroundAssetId || sc.theme);
+                const bgLabel =
+                  bgAsset?.name ||
+                  PROCEDURAL_THEME_OPTIONS.find((t) => t.value === sc.theme)?.label ||
+                  sc.backgroundAssetId ||
+                  sc.theme;
+                const actorSummary = sc.characters
+                  .map((ch) => {
+                    const sprite =
+                      ch.kind === 'human_rig'
+                        ? undefined
+                        : resolveSpriteAssetForCharacter(ch, sc.captionTop);
+                    return sprite
+                      ? `${ch.name} (স্প্রাইট: ${sprite.name})`
+                      : `${ch.name} (${video.renderStyle === 'cartoon_2d' ? 'কার্টুন মানুষ' : 'স্টিক মানুষ'})`;
+                  })
+                  .join(' · ');
+
                 return (
                   <div
                     key={sIdx}
                     className={`p-4 space-y-3 ${isActivePlaying ? 'bg-slate-50' : 'bg-white'}`}
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                      <span className="font-bold text-slate-900">
-                        দৃশ্য {sIdx + 1}
-                        {sc.captionTop ? ` — ${sc.captionTop}` : ''}
-                      </span>
-                      <span className="font-mono-tabular text-slate-500">{sc.durationSec}s</span>
+                    <div className="space-y-0.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <span className="font-bold text-slate-900">
+                          দৃশ্য {sIdx + 1}
+                          {sc.captionTop ? ` — ${sc.captionTop}` : ''}
+                        </span>
+                        <span className="font-mono-tabular text-slate-500">{sc.durationSec}s</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        ব্যাকগ্রাউন্ড: {bgLabel}
+                        {actorSummary ? ` · চরিত্র: ${actorSummary}` : ''}
+                      </p>
                     </div>
 
                     {showAdvancedEditor && (
@@ -1019,22 +1086,20 @@ export function VideoStudioView({
                           }}
                           className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs"
                         >
-                          {THEME_OPTIONS.map((o) => (
+                          {hybridAssets
+                            .filter((a) => a.category === 'background')
+                            .map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.name}
+                              </option>
+                            ))}
+                          {PROCEDURAL_THEME_OPTIONS.filter(
+                            (o) => !hybridAssets.some((a) => a.id === o.value)
+                          ).map((o) => (
                             <option key={o.value} value={o.value}>
                               {o.label}
                             </option>
                           ))}
-                          {hybridAssets
-                            .filter(
-                              (a) =>
-                                a.category === 'background' &&
-                                !THEME_OPTIONS.some((t) => t.value === a.id)
-                            )
-                            .map((a) => (
-                              <option key={a.id} value={a.id}>
-                                {a.name} ({a.source === 'ai_generated' ? 'AI' : 'কাস্টম'})
-                              </option>
-                            ))}
                         </select>
 
                         <select
@@ -1262,9 +1327,10 @@ export function VideoStudioView({
                                   )}
                                 </div>
 
-                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                                  <select
-                                    value={ch.action}
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                  <input
+                                    type="text"
+                                    value={ch.action || ''}
                                     onChange={(e) => {
                                       const next = video.scenes.map((item, i) =>
                                         i === sIdx
@@ -1272,7 +1338,7 @@ export function VideoStudioView({
                                               ...item,
                                               characters: item.characters.map((cc, j) =>
                                                 j === cIdx
-                                                  ? { ...cc, action: e.target.value as VideoAction }
+                                                  ? { ...cc, action: e.target.value }
                                                   : cc
                                               ),
                                             }
@@ -1280,40 +1346,9 @@ export function VideoStudioView({
                                       );
                                       onUpdateVideo({ ...video, scenes: next });
                                     }}
-                                    className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                                  >
-                                    {ACTION_OPTIONS.map((o) => (
-                                      <option key={o.value} value={o.value}>
-                                        {o.label}
-                                      </option>
-                                    ))}
-                                  </select>
-
-                                  <select
-                                    value={ch.prop}
-                                    onChange={(e) => {
-                                      const next = video.scenes.map((item, i) =>
-                                        i === sIdx
-                                          ? {
-                                              ...item,
-                                              characters: item.characters.map((cc, j) =>
-                                                j === cIdx
-                                                  ? { ...cc, prop: e.target.value as VideoProp }
-                                                  : cc
-                                              ),
-                                            }
-                                          : item
-                                      );
-                                      onUpdateVideo({ ...video, scenes: next });
-                                    }}
-                                    className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                                  >
-                                    {PROP_OPTIONS.map((o) => (
-                                      <option key={o.value} value={o.value}>
-                                        {o.label}
-                                      </option>
-                                    ))}
-                                  </select>
+                                    placeholder="অ্যাকশন (যেমন: walk_in, run, charge_butt)"
+                                    className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-900"
+                                  />
 
                                   <select
                                     value={ch.voiceEffect || 'normal'}
