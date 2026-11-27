@@ -119,7 +119,6 @@ export const STARTER_VIDEOS: VideoItem[] = [
                 rightLegDeg: { hip: -15, knee: 0 },
                 vibrate: 0,
                 heldProp: 'none',
-                spriteFrame: 1,
               },
               {
                 t: 1,
@@ -136,7 +135,6 @@ export const STARTER_VIDEOS: VideoItem[] = [
                 rightLegDeg: { hip: 15, knee: 0 },
                 vibrate: 0,
                 heldProp: 'none',
-                spriteFrame: 2,
               },
             ],
           },

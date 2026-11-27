@@ -26,6 +26,7 @@ export interface InterpolatedPose {
   heldProp: HeldPropType;
   expression: ExpressionType | 'exhausted';
   spriteFrame?: number;
+  isMoving: boolean;
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -181,6 +182,10 @@ export function interpolateCharacterKeyframes(
   const activeSpriteFrame =
     alpha < 0.5 ? a.spriteFrame : (b.spriteFrame ?? a.spriteFrame);
 
+  const rawDx = Math.abs((b.x ?? defaultX) - (a.x ?? defaultX));
+  const rawDy = Math.abs((b.y ?? 0) - (a.y ?? 0));
+  const isMoving = rawDx > 0.015 || rawDy > 0.02;
+
   return {
     x: lerp(a.x ?? defaultX, b.x ?? defaultX, alpha),
     y: clampedY,
@@ -210,6 +215,7 @@ export function interpolateCharacterKeyframes(
     heldProp: activeProp,
     expression: activeExp,
     spriteFrame: activeSpriteFrame,
+    isMoving,
   };
 }
 
@@ -223,8 +229,15 @@ function getColoredLook(id: CharacterId) {
       return { skin: '#FDE68A', shirt: '#334155', pants: '#0F172A', hair: '#475569' };
     case 'chacha':
       return { skin: '#FDBA74', shirt: '#D97706', pants: '#334155', hair: '#94A3B8' };
-    default:
+    case 'friend':
       return { skin: '#FCD5B5', shirt: '#DB2777', pants: '#1E293B', hair: '#0F172A' };
+    default: {
+      const key = String(id || '');
+      let h = 0;
+      for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+      const shirts = ['#0284C7', '#059669', '#D97706', '#DC2626', '#7C3AED'];
+      return { skin: '#FDBA74', shirt: shirts[h % shirts.length], pants: '#1E293B', hair: '#0F172A' };
+    }
   }
 }
 
@@ -377,43 +390,69 @@ export function drawSpriteSheetActor(
   const frameCount = Math.max(1, asset?.frameCount || cols * rows);
   const fps = Math.max(2, asset?.fps || 6);
 
-  // Pick sprite frame intelligently from action/motion or explicit spriteFrame
+  const actionStr = String(char.action || '').toLowerCase();
+  const isChargeOrAttack =
+    actionStr.includes('charge') ||
+    actionStr.includes('butt') ||
+    actionStr.includes('attack') ||
+    actionStr.includes('pounce') ||
+    actionStr.includes('shocked_jump') ||
+    pose.torsoLeanDeg > 16;
+  const actionIndicatesMotion =
+    isChargeOrAttack ||
+    ['walk', 'run', 'chase', 'gallop', 'fly', 'drive', 'ride', 'move', 'trot', 'follow'].some((k) =>
+      actionStr.includes(k)
+    ) ||
+    Math.abs(pose.leftLeg.hip) > 12;
+  const actuallyMoving = pose.isMoving || actionIndicatesMotion;
+
+  // Pick sprite frame smoothly: cycle through sprite sheet when moving, respect explicit freeze frame only when posed/climax
   let frameIdx = 0;
-  if (typeof pose.spriteFrame === 'number' && Number.isFinite(pose.spriteFrame)) {
-    frameIdx = Math.abs(Math.floor(pose.spriteFrame)) % frameCount;
-  } else if (
-    (char.action === 'charge_butt' || char.action === 'shocked_jump' || pose.torsoLeanDeg > 16) &&
-    frameCount >= 4 &&
-    tNorm > 0.35
-  ) {
-    // Frame 3 is action/headbutt/charge pose in 4-frame sprite sheets
-    frameIdx = frameCount - 1;
-  } else if (char.action === 'walk_in' || char.action === 'run' || Math.abs(pose.leftLeg.hip) > 12) {
-    if (frameCount >= 3) {
-      // Alternate frames 1 & 2 for smooth walk stride
-      const step = Math.floor(globalT * fps) % 2;
-      frameIdx = 1 + step;
+  if (isChargeOrAttack && frameCount >= 4 && tNorm > 0.35 && tNorm < 0.72) {
+    frameIdx =
+      typeof pose.spriteFrame === 'number' && Number.isFinite(pose.spriteFrame)
+        ? Math.abs(Math.floor(pose.spriteFrame)) % frameCount
+        : frameCount - 1;
+  } else if (actuallyMoving && frameCount > 1) {
+    const moveFps = actionStr.includes('run') || isChargeOrAttack ? Math.max(8, fps + 2) : fps;
+    if (frameCount >= 4) {
+      // Cycle stride frames smoothly across walk frames (0, 1, 2, 1) or all frames
+      const walkCycle = [1, 2, 1, 0];
+      frameIdx = walkCycle[Math.floor(globalT * moveFps) % walkCycle.length];
+    } else if (frameCount >= 3) {
+      frameIdx = 1 + (Math.floor(globalT * moveFps) % 2);
     } else {
-      frameIdx = Math.floor(globalT * fps) % frameCount;
+      frameIdx = Math.floor(globalT * moveFps) % frameCount;
     }
+  } else if (typeof pose.spriteFrame === 'number' && Number.isFinite(pose.spriteFrame)) {
+    frameIdx = Math.abs(Math.floor(pose.spriteFrame)) % frameCount;
   } else {
-    frameIdx = Math.floor(globalT * Math.min(4, fps)) % Math.min(2, frameCount);
+    // Gentle idle breathing / grazing animation across available frames
+    frameIdx = Math.floor(globalT * Math.min(3.5, fps)) % Math.min(2, frameCount);
+  }
+
+  let drawW = 240 * totalScale;
+  let drawH = 208 * totalScale;
+  if (img && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+    const cellW = img.naturalWidth / cols;
+    const cellH = img.naturalHeight / rows;
+    if (cellW > 0 && cellH > 0) {
+      const aspect = cellW / cellH;
+      const targetH = 216 * totalScale;
+      drawW = Math.min(340 * totalScale, Math.max(150 * totalScale, targetH * aspect));
+      drawH = drawW / aspect;
+    }
   }
 
   ctx.save();
   // Ground contact shadow
   ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
   ctx.beginPath();
-  ctx.ellipse(worldX, groundY + 4, 72 * totalScale, 12 * totalScale, 0, 0, Math.PI * 2);
+  ctx.ellipse(worldX, groundY + 4, Math.min(115 * totalScale, drawW * 0.34), 12 * totalScale, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  const drawW = 240 * totalScale;
-  const drawH = 208 * totalScale;
   // Subtle walk bounce when moving
-  const walkBounce =
-    char.action === 'walk_in' || char.action === 'run' || char.action === 'charge_butt'
-      ? Math.abs(Math.sin(globalT * 10)) * 6
-      : 0;
+  const walkBounce = actuallyMoving ? Math.abs(Math.sin(globalT * 10)) * 6 : 0;
 
   ctx.translate(worldX, worldY - drawH / 2 - walkBounce);
   ctx.rotate((pose.rotationDeg * Math.PI) / 180);
@@ -431,7 +470,7 @@ export function drawSpriteSheetActor(
       cellW,
       cellH,
       -drawW / 2,
-      -drawH / 2 + 12 * totalScale,
+      -drawH / 2 + 10 * totalScale,
       drawW,
       drawH
     );

@@ -879,12 +879,35 @@ function drawHybridBackgroundImage(
   const ih = img.naturalHeight;
   if (iw <= 0 || ih <= 0) return;
 
-  // Builtin SVGs are authored with horizon at 72% height; preserve horizon alignment in 9:16 and 1:1
+  // Builtin SVGs are authored with horizon at 72% height; preserve aspect ratio and horizon alignment in 9:16 & 1:1
   if (Math.abs(iw / ih - w / h) < 0.08) {
     ctx.drawImage(img, 0, 0, w, h);
     return;
   }
+
   const srcHorizon = Math.round(ih * 0.72);
+  if (iw / ih < w / h) {
+    // Tall portrait background (e.g. 9:16) rendered into wider frame (e.g. 1:1): preserve horizontal scale & crop cleanly from horizon
+    const scaleX = w / iw;
+    const neededSrcAbove = groundY / scaleX;
+    const neededSrcBelow = (h - groundY) / scaleX;
+    if (neededSrcAbove <= srcHorizon && neededSrcBelow <= ih - srcHorizon) {
+      const srcAboveStart = Math.max(0, Math.round(srcHorizon - neededSrcAbove));
+      const srcAboveH = srcHorizon - srcAboveStart;
+      const srcBelowH = Math.min(ih - srcHorizon, Math.round(neededSrcBelow));
+      ctx.drawImage(img, 0, srcAboveStart, iw, srcAboveH, 0, 0, w, groundY);
+      ctx.drawImage(img, 0, srcHorizon, iw, srcBelowH, 0, groundY, w, h - groundY);
+      return;
+    }
+  } else {
+    // Wide image rendered into taller frame: cover-crop horizontally centered while anchoring horizon at groundY
+    const srcW = Math.min(iw, Math.round(ih * (w / h)));
+    const srcX = Math.max(0, Math.round((iw - srcW) / 2));
+    ctx.drawImage(img, srcX, 0, srcW, srcHorizon, 0, 0, w, groundY);
+    ctx.drawImage(img, srcX, srcHorizon, srcW, ih - srcHorizon, 0, groundY, w, h - groundY);
+    return;
+  }
+
   ctx.drawImage(img, 0, 0, iw, srcHorizon, 0, 0, w, groundY);
   ctx.drawImage(img, 0, srcHorizon, iw, ih - srcHorizon, 0, groundY, w, h - groundY);
 }
@@ -1162,8 +1185,22 @@ export function renderVideoFrame(
         ? interpolateCharacterKeyframes(char, tNorm, defaultXNorm, defaultFacing)
         : null;
 
-    // Keep speaking character visible on stage unless rolling offscreen
-    if (rigPose && isSpeaking && rigPose.curlBall < 0.5 && (rigPose.x < 0.1 || rigPose.x > 0.9)) {
+    const hasIntentionalOffscreenMotion =
+      Array.isArray(char.keyframes) &&
+      char.keyframes.length >= 2 &&
+      (char.keyframes[0].x < 0.05 ||
+        char.keyframes[0].x > 0.95 ||
+        char.keyframes[char.keyframes.length - 1].x < 0.05 ||
+        char.keyframes[char.keyframes.length - 1].x > 0.95);
+
+    // Keep static speaking character visible on stage unless entering/exiting/rolling offscreen
+    if (
+      rigPose &&
+      isSpeaking &&
+      !hasIntentionalOffscreenMotion &&
+      rigPose.curlBall < 0.5 &&
+      (rigPose.x < 0.1 || rigPose.x > 0.9)
+    ) {
       rigPose = { ...rigPose, x: Math.max(0.14, Math.min(0.86, rigPose.x)) };
     }
 
@@ -1171,9 +1208,13 @@ export function renderVideoFrame(
     const effectiveYPx = rigPose ? groundY - Math.max(0, rigPose.y) * (h * 0.42) : groundY;
     resolvedCharacterPositions.push({ xNorm: effectiveXNorm, yPx: effectiveYPx });
 
-    const spriteAsset = resolveSpriteAssetForCharacter(char);
+    const spriteAsset =
+      char.kind === 'human_rig'
+        ? undefined
+        : resolveSpriteAssetForCharacter(char, scene.captionTop);
     const isSpriteActor =
-      char.kind === 'sprite_actor' || Boolean(spriteAsset) || Boolean(char.inlineSvg);
+      char.kind !== 'human_rig' &&
+      (char.kind === 'sprite_actor' || Boolean(spriteAsset) || Boolean(char.inlineSvg));
 
     if (isSpriteActor) {
       const spriteImg =
@@ -1195,6 +1236,7 @@ export function renderVideoFrame(
         scale: 1,
         heldProp: 'none' as const,
         expression: char.expression,
+        isMoving: false,
       };
       drawSpriteSheetActor(
         ctx,
