@@ -1208,13 +1208,11 @@ export function renderVideoFrame(
     const effectiveYPx = rigPose ? groundY - Math.max(0, rigPose.y) * (h * 0.42) : groundY;
     resolvedCharacterPositions.push({ xNorm: effectiveXNorm, yPx: effectiveYPx });
 
-    const spriteAsset =
-      char.kind === 'human_rig'
-        ? undefined
-        : resolveSpriteAssetForCharacter(char, scene.captionTop);
+    const spriteAsset = resolveSpriteAssetForCharacter(char, scene.captionTop);
     const isSpriteActor =
-      char.kind !== 'human_rig' &&
-      (char.kind === 'sprite_actor' || Boolean(spriteAsset) || Boolean(char.inlineSvg));
+      Boolean(spriteAsset) ||
+      char.kind === 'sprite_actor' ||
+      Boolean(char.inlineSvg);
 
     if (isSpriteActor) {
       const spriteImg =

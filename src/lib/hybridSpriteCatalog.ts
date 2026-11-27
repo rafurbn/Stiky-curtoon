@@ -57,17 +57,108 @@ export const BUILTIN_HYBRID_ASSETS: HybridAssetItem[] = [
     url: '/assets/backgrounds/tea_stall_day.svg',
   },
   {
-    id: 'cow',
-    name: 'দেশি গরু (৪-ফ্রেম স্প্রাইট)',
-    keywords: ['গরু', 'গুরু', 'গাভী', 'ষাঁড়', 'গুতো', 'বাছুর', 'ঘাস', 'হাম্বা', 'cow', 'bull', 'cattle'],
+    id: 'cow_grass_eating',
+    name: 'গরু ঘাস খাচ্ছে (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['গরু', 'গুরু', 'গাভী', 'ঘাস', 'খাচ্ছে', 'চরে', 'সবুজ মাঠ', 'শান্ত গরু', 'cow', 'cow grass eating', 'grazing', 'eat grass', 'idle'],
     category: 'sprite_actor',
     format: 'svg_spritesheet',
     source: 'builtin',
-    url: '/assets/actors/cow.svg',
+    url: '/assets/actors/cow_grass_eating.svg',
     cols: 4,
-    rows: 1,
-    frameCount: 4,
-    fps: 6,
+    rows: 2,
+    frameCount: 8,
+    fps: 7,
+  },
+  {
+    id: 'cow_mooing',
+    name: 'গরু ডাকছে / হাম্বা (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['গরু ডাকছে', 'হাম্বা', 'হাম্বাআ', 'গরু কথা', 'ডাক', 'গরু', 'গুরু', 'cow mooing', 'moo', 'talking cow', 'speaking'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/cow_mooing.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 8,
+  },
+  {
+    id: 'cow_attacking',
+    name: 'গরু তাড়া ও আক্রমণ (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['গরু তাড়া', 'গরু আক্রমণ', 'গুতো', 'গুঁতো', 'তেড়ে', 'রাগান্বিত গরু', 'ধাক্কা', 'গরু', 'গুরু', 'cow attacking', 'charge', 'attack', 'butt', 'angry cow', 'chasing'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/cow_attacking.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 9,
+  },
+  {
+    id: 'tiger_walk_roar',
+    name: 'বাঘ হাঁটছে ও গর্জন (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['বাঘ', 'রয়েল বেঙ্গল', 'বাঘ মামা', 'হালুম', 'গর্জন', 'হাঁটছে', 'জঙ্গল', 'বন', 'tiger', 'tiger walk roar', 'roar', 'walk', 'jungle'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/tiger_walk_roar.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 8,
+  },
+  {
+    id: 'tiger_run_attack',
+    name: 'বাঘ দৌড় ও ঝাঁপ (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['বাঘ দৌড়', 'বাঘ তাড়া', 'বাঘ আক্রমণ', 'ঝাঁপ', 'শিকার', 'ভয়ানক বাঘ', 'বাঘ', 'tiger run attack', 'tiger run', 'tiger attack', 'chase', 'pounce', 'running tiger'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/tiger_run_attack.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 10,
+  },
+  {
+    id: 'rafu_walk_talk',
+    name: 'রাফু হাঁটা ও কথা বলা (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['রাফু', 'রফু', 'রফু ভাই', 'ছেলে', 'হাঁটা', 'কথা', 'বন্ধু', 'rafu', 'rofu', 'rafu walk talk', 'walk', 'talk', 'boy'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/rafu_walk_talk.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 8,
+  },
+  {
+    id: 'rafu_running_away',
+    name: 'রাফু ভয়ে দৌড়ে পালাচ্ছে (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['রাফু পালাচ্ছে', 'রফু পালাচ্ছে', 'রাফু দৌড়', 'রফু দৌড়', 'পালা', 'দৌড়ে', 'ভাগ', 'রাফু', 'রফু', 'rafu running away', 'running away', 'flee', 'escape', 'run'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/rafu_running_away.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 10,
+  },
+  {
+    id: 'boy_scared',
+    name: 'রাফু / ছেলে ভয় পেয়েছে (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['ভয়', 'চমকে', 'আতঙ্ক', 'কান্না', 'ভীত', 'ছেলে ভয়', 'রাফু ভয়', 'রফু ভয়', 'boy scared', 'scared', 'shocked', 'afraid', 'panicked', 'crying', 'rafu'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/boy_scared.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 8,
   },
   {
     id: 'dog',
@@ -148,9 +239,22 @@ export const BUILTIN_HYBRID_ASSETS: HybridAssetItem[] = [
     fps: 7,
   },
   {
+    id: 'cow',
+    name: 'দেশি গরু পুরনো (৪-ফ্রেম স্প্রাইট)',
+    keywords: ['গরু পুরনো', 'cow legacy'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/cow.svg',
+    cols: 4,
+    rows: 1,
+    frameCount: 4,
+    fps: 6,
+  },
+  {
     id: 'tiger',
-    name: 'রয়েল বেঙ্গল বাঘ (৪-ফ্রেম স্প্রাইট)',
-    keywords: ['বাঘ', 'সিংহ', 'জঙ্গল', 'tiger', 'lion'],
+    name: 'রয়েল বেঙ্গল বাঘ পুরনো (৪-ফ্রেম স্প্রাইট)',
+    keywords: ['বাঘ পুরনো', 'tiger legacy'],
     category: 'sprite_actor',
     format: 'svg_spritesheet',
     source: 'builtin',
@@ -264,7 +368,173 @@ function hashKey(str: string): string {
   return `svg_${(h >>> 0).toString(16)}`;
 }
 
-export function loadImageFromUrl(url: string): Promise<HTMLImageElement | null> {
+function isNearWhitePixel(data: Uint8ClampedArray, idx4: number, minLum = 212): boolean {
+  const a = data[idx4 + 3];
+  if (a < 25) return false;
+  const r = data[idx4];
+  const g = data[idx4 + 1];
+  const b = data[idx4 + 2];
+  const maxC = r > g ? (r > b ? r : b) : g > b ? g : b;
+  const minC = r < g ? (r < b ? r : b) : g < b ? g : b;
+  return minC >= minLum && maxC - minC <= 26;
+}
+
+function cleanOpaqueSpriteSheetWhiteBg(
+  img: HTMLImageElement,
+  cols: number,
+  rows: number
+): Promise<HTMLImageElement> {
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  if (w <= 0 || h <= 0 || typeof document === 'undefined') {
+    return Promise.resolve(img);
+  }
+
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return Promise.resolve(img);
+
+    ctx.drawImage(img, 0, 0, w, h);
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+
+    // Quick corner check: only strip if corners are opaque near-white (e.g. PNG-traced SVGs)
+    const sampleCoords = [
+      [0, 0],
+      [w - 1, 0],
+      [0, h - 1],
+      [w - 1, h - 1],
+    ];
+    let opaqueWhiteCorners = 0;
+    for (const [sx, sy] of sampleCoords) {
+      const idx = (sy * w + sx) * 4;
+      if (data[idx + 3] >= 200 && isNearWhitePixel(data, idx, 224)) {
+        opaqueWhiteCorners++;
+      }
+    }
+    if (opaqueWhiteCorners === 0) {
+      return Promise.resolve(img);
+    }
+
+    const safeCols = Math.max(1, cols);
+    const safeRows = Math.max(1, rows);
+    const visited = new Uint8Array(w * h);
+    const maxCellW = Math.ceil(w / safeCols) + 2;
+    const maxCellH = Math.ceil(h / safeRows) + 2;
+    const queue = new Int32Array(maxCellW * maxCellH);
+
+    for (let r = 0; r < safeRows; r++) {
+      const y0 = Math.floor((r * h) / safeRows);
+      const y1 = Math.floor(((r + 1) * h) / safeRows);
+      for (let c = 0; c < safeCols; c++) {
+        const x0 = Math.floor((c * w) / safeCols);
+        const x1 = Math.floor(((c + 1) * w) / safeCols);
+
+        let head = 0;
+        let tail = 0;
+
+        const trySeed = (px: number, py: number) => {
+          const p = py * w + px;
+          if (visited[p]) return;
+          if (isNearWhitePixel(data, p * 4, 212)) {
+            visited[p] = 1;
+            queue[tail++] = p;
+          }
+        };
+
+        for (let px = x0; px < x1; px++) {
+          trySeed(px, y0);
+          trySeed(px, y1 - 1);
+        }
+        for (let py = y0; py < y1; py++) {
+          trySeed(x0, py);
+          trySeed(x1 - 1, py);
+        }
+
+        while (head < tail) {
+          const p = queue[head++];
+          data[p * 4 + 3] = 0;
+          const px = p % w;
+          const py = (p / w) | 0;
+
+          if (px > x0) {
+            const np = p - 1;
+            if (!visited[np] && isNearWhitePixel(data, np * 4, 212)) {
+              visited[np] = 1;
+              queue[tail++] = np;
+            }
+          }
+          if (px + 1 < x1) {
+            const np = p + 1;
+            if (!visited[np] && isNearWhitePixel(data, np * 4, 212)) {
+              visited[np] = 1;
+              queue[tail++] = np;
+            }
+          }
+          if (py > y0) {
+            const np = p - w;
+            if (!visited[np] && isNearWhitePixel(data, np * 4, 212)) {
+              visited[np] = 1;
+              queue[tail++] = np;
+            }
+          }
+          if (py + 1 < y1) {
+            const np = p + w;
+            if (!visited[np] && isNearWhitePixel(data, np * 4, 212)) {
+              visited[np] = 1;
+              queue[tail++] = np;
+            }
+          }
+        }
+      }
+    }
+
+    // Softly feather 1px anti-aliased bright-gray edge touching cleared background
+    for (let y = 1; y < h - 1; y++) {
+      const rowOff = y * w;
+      for (let x = 1; x < w - 1; x++) {
+        const p = rowOff + x;
+        if (visited[p]) continue;
+        const idx4 = p * 4;
+        if (data[idx4 + 3] === 0) continue;
+        if (
+          !visited[p - 1] &&
+          !visited[p + 1] &&
+          !visited[p - w] &&
+          !visited[p + w]
+        ) {
+          continue;
+        }
+        const lum = (data[idx4] + data[idx4 + 1] + data[idx4 + 2]) / 3;
+        const spread =
+          Math.max(data[idx4], data[idx4 + 1], data[idx4 + 2]) -
+          Math.min(data[idx4], data[idx4 + 1], data[idx4 + 2]);
+        if (lum >= 175 && spread <= 24) {
+          data[idx4 + 3] = lum >= 200 ? 0 : Math.round(((215 - lum) / 40) * 180);
+        }
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+    const pngDataUrl = canvas.toDataURL('image/png');
+    return new Promise<HTMLImageElement>((resolve) => {
+      const cleaned = new Image();
+      cleaned.onload = () => resolve(cleaned);
+      cleaned.onerror = () => resolve(img);
+      cleaned.src = pngDataUrl;
+    });
+  } catch {
+    return Promise.resolve(img);
+  }
+}
+
+export function loadImageFromUrl(
+  url: string,
+  metaHint?: Pick<HybridAssetItem, 'category' | 'cols' | 'rows'>
+): Promise<HTMLImageElement | null> {
   if (!url) return Promise.resolve(null);
   const existing = imageCache.get(url);
   if (existing && existing.complete && existing.naturalWidth > 0) {
@@ -273,22 +543,52 @@ export function loadImageFromUrl(url: string): Promise<HTMLImageElement | null> 
   const inflight = pendingLoads.get(url);
   if (inflight) return inflight;
 
+  const catalogMatch =
+    metaHint || cachedCatalog.find((a) => a.url === url || `/api/assets/file/${a.id}` === url);
+
+  const finalizeLoaded = async (loaded: HTMLImageElement): Promise<HTMLImageElement> => {
+    const isLikely4x2 = loaded.naturalWidth === 1408 && loaded.naturalHeight === 768;
+    const isSprite = catalogMatch?.category === 'sprite_actor' || isLikely4x2;
+    if (isSprite && catalogMatch?.category !== 'background') {
+      const cols = Math.max(1, catalogMatch?.cols || (isLikely4x2 ? 4 : 4));
+      const rows = Math.max(1, catalogMatch?.rows || (isLikely4x2 ? 2 : 1));
+      return cleanOpaqueSpriteSheetWhiteBg(loaded, cols, rows);
+    }
+    return loaded;
+  };
+
   const p = new Promise<HTMLImageElement | null>((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
-      imageCache.set(url, img);
-      pendingLoads.delete(url);
-      resolve(img);
+      finalizeLoaded(img)
+        .then((readyImg) => {
+          imageCache.set(url, readyImg);
+          pendingLoads.delete(url);
+          resolve(readyImg);
+        })
+        .catch(() => {
+          imageCache.set(url, img);
+          pendingLoads.delete(url);
+          resolve(img);
+        });
     };
     img.onerror = () => {
       const backup = fallbackDataUrlByAssetUrl.get(url);
       if (backup && backup !== url) {
         const retryImg = new Image();
         retryImg.onload = () => {
-          imageCache.set(url, retryImg);
-          pendingLoads.delete(url);
-          resolve(retryImg);
+          finalizeLoaded(retryImg)
+            .then((readyImg) => {
+              imageCache.set(url, readyImg);
+              pendingLoads.delete(url);
+              resolve(readyImg);
+            })
+            .catch(() => {
+              imageCache.set(url, retryImg);
+              pendingLoads.delete(url);
+              resolve(retryImg);
+            });
         };
         retryImg.onerror = () => {
           pendingLoads.delete(url);
@@ -382,13 +682,127 @@ export async function preloadScriptAssets(script: VideoScript): Promise<void> {
   await Promise.all(tasks);
 }
 
+function isActionMatch(text: string, patterns: RegExp): boolean {
+  return patterns.test(text);
+}
+
+export function selectActionAwareSpriteId(
+  char: Pick<VideoCharacterState, 'id' | 'name' | 'action' | 'expression' | 'speech' | 'spriteAssetId'>,
+  sceneContext = ''
+): string | undefined {
+  const charNameLow = (char.name || '').toLowerCase().replace(/গুরু/g, 'গরু');
+  const spIdLow = (char.spriteAssetId || '').toLowerCase();
+  const actionLow = (char.action || '').toLowerCase();
+  const expLow = (char.expression || '').toLowerCase();
+  const speechLow = (char.speech || '').toLowerCase();
+
+  // Cow family -> 8-frame sheets
+  if (
+    spIdLow.startsWith('cow') ||
+    /(গরু|গাভী|ষাঁড়|বাছুর|\bcow\b|\bbull\b|\bcattle\b)/.test(charNameLow)
+  ) {
+    if (
+      spIdLow === 'cow_attacking' ||
+      expLow === 'angry' ||
+      isActionMatch(
+        `${actionLow} ${speechLow} ${sceneContext.toLowerCase()}`,
+        /(attack|charge|butt|chase|angry|গুতো|গুঁতো|তাড়া|তেড়ে|আক্রমণ|ধাক্কা|রাগ)/
+      )
+    ) {
+      return 'cow_attacking';
+    }
+    if (
+      spIdLow === 'cow_mooing' ||
+      speechLow.trim().length > 0 ||
+      isActionMatch(
+        `${actionLow} ${speechLow} ${sceneContext.toLowerCase()}`,
+        /(moo|হাম্বা|ডাক|talk|speak|কথা)/
+      )
+    ) {
+      return 'cow_mooing';
+    }
+    return 'cow_grass_eating';
+  }
+
+  // Tiger family -> 8-frame sheets
+  if (
+    spIdLow.startsWith('tiger') ||
+    /(বাঘ|রয়েল|সিংহ|\btiger\b|\blion\b)/.test(charNameLow)
+  ) {
+    if (
+      spIdLow === 'tiger_run_attack' ||
+      isActionMatch(
+        `${actionLow} ${speechLow} ${sceneContext.toLowerCase()}`,
+        /(run|attack|chase|pounce|jump|charge|দৌড়|তাড়া|ঝাঁপ|আক্রমণ|শিকার)/
+      )
+    ) {
+      return 'tiger_run_attack';
+    }
+    return 'tiger_walk_roar';
+  }
+
+  // Rafu / Boy family -> 8-frame sheets
+  if (
+    spIdLow.startsWith('rafu') ||
+    spIdLow === 'boy_scared' ||
+    /(রাফু|রফু|rafu|rofu|ছেলে|বালক|\bboy\b)/.test(charNameLow)
+  ) {
+    if (
+      spIdLow === 'rafu_running_away' ||
+      isActionMatch(
+        `${actionLow} ${speechLow} ${sceneContext.toLowerCase()}`,
+        /(run|flee|escape|দৌড়|পালা|ভাগ)/
+      )
+    ) {
+      return 'rafu_running_away';
+    }
+    if (
+      spIdLow === 'boy_scared' ||
+      ['shocked', 'crying', 'exhausted', 'confused'].includes(expLow) ||
+      isActionMatch(
+        `${actionLow} ${speechLow} ${sceneContext.toLowerCase()}`,
+        /(scared|shocked|afraid|fear|panick|scream|jump|cry|ভয়|আতঙ্ক|চমক|কান্না|ওরে|বাঁচাও)/
+      )
+    ) {
+      return 'boy_scared';
+    }
+    return 'rafu_walk_talk';
+  }
+
+  return undefined;
+}
+
+export function shouldCharacterUseSpriteSheet(
+  char: VideoCharacterState
+): boolean {
+  const usesLegacyStickPropScene =
+    ['knock_door', 'desperate_squeeze', 'scream_jaw', 'dramatic_closeup', 'collapsed_mess', 'pour_water'].includes(
+      String(char.action || '')
+    ) || Boolean(char.prop && char.prop !== 'none');
+
+  if (char.kind === 'sprite_actor' || Boolean(char.spriteAssetId)) return true;
+  if (usesLegacyStickPropScene) return false;
+
+  const charNameLow = (char.name || '').toLowerCase().replace(/গুরু/g, 'গরু');
+  return /(গরু|গাভী|ষাঁড়|বাঘ|রাফু|রফু|rafu|rofu|ছেলে|বালক|\bcow\b|\btiger\b|\bboy\b)/.test(
+    charNameLow
+  );
+}
+
 export function resolveSpriteAssetForCharacter(
   char: VideoCharacterState,
   sceneContext = ''
 ): HybridAssetItem | undefined {
-  // Humans rendered with articulated rig must NEVER be hijacked into animal/vehicle sprites via speech/captions
-  if (char.kind === 'human_rig') {
+  // Humans rendered with articulated rig stay human_rig unless they match Rafu/Cow/Tiger 8-frame sheets
+  if (char.kind === 'human_rig' && !shouldCharacterUseSpriteSheet(char)) {
     return undefined;
+  }
+
+  // Prioritize action-aware 8-frame sheet for Cow, Tiger, and Rafu/Boy
+  const smartId = selectActionAwareSpriteId(char, sceneContext);
+  if (smartId) {
+    const smartAsset = findAssetByIdOrTheme(smartId);
+    if (smartAsset) return smartAsset;
   }
 
   if (char.spriteAssetId) {
@@ -414,14 +828,15 @@ export function resolveSpriteAssetForCharacter(
     const nameLower = asset.name.toLowerCase().replace(/গুরু/g, 'গরু');
     const idLower = asset.id.toLowerCase();
     const charNameLow = (char.name || '').toLowerCase().replace(/গুরু/g, 'গরু').trim();
+    const multiFrameBonus = (asset.frameCount || 1) >= 8 ? 3 : 0;
 
     if (charNameLow && (nameLower.includes(charNameLow) || idLower === charNameLow)) {
-      score += 6;
+      score += 6 + multiFrameBonus;
     }
     for (const kw of asset.keywords) {
       const k = kw.toLowerCase().replace(/গুরু/g, 'গরু').trim();
       if (k && hay.includes(k)) {
-        score += asset.source === 'builtin' ? 3 : 6;
+        score += (asset.source === 'builtin' ? 3 : 6) + multiFrameBonus;
       }
     }
     for (const word of nameLower.split(/[\s,_\-()]+/)) {

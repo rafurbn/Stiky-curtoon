@@ -388,7 +388,8 @@ export function drawSpriteSheetActor(
   const cols = Math.max(1, asset?.cols || 1);
   const rows = Math.max(1, asset?.rows || 1);
   const frameCount = Math.max(1, asset?.frameCount || cols * rows);
-  const fps = Math.max(2, asset?.fps || 6);
+  const fps = Math.max(2, asset?.fps || 7);
+  const isMultiFrameSheet = frameCount > 4 || rows > 1;
 
   const actionStr = String(char.action || '').toLowerCase();
   const isChargeOrAttack =
@@ -398,25 +399,38 @@ export function drawSpriteSheetActor(
     actionStr.includes('pounce') ||
     actionStr.includes('shocked_jump') ||
     pose.torsoLeanDeg > 16;
+  const isRunOrFlee =
+    actionStr.includes('run') ||
+    actionStr.includes('flee') ||
+    actionStr.includes('escape') ||
+    actionStr.includes('chase');
   const actionIndicatesMotion =
     isChargeOrAttack ||
-    ['walk', 'run', 'chase', 'gallop', 'fly', 'drive', 'ride', 'move', 'trot', 'follow'].some((k) =>
+    isRunOrFlee ||
+    ['walk', 'gallop', 'fly', 'drive', 'ride', 'move', 'trot', 'follow'].some((k) =>
       actionStr.includes(k)
     ) ||
     Math.abs(pose.leftLeg.hip) > 12;
   const actuallyMoving = pose.isMoving || actionIndicatesMotion;
 
-  // Pick sprite frame smoothly: cycle through sprite sheet when moving, respect explicit freeze frame only when posed/climax
+  // Pick sprite frame smoothly across ALL available frames (including row 1 & row 2 in 4x2 8-frame sheets)
   let frameIdx = 0;
-  if (isChargeOrAttack && frameCount >= 4 && tNorm > 0.35 && tNorm < 0.72) {
+  if (isMultiFrameSheet) {
+    const activeFps =
+      isRunOrFlee || isChargeOrAttack
+        ? Math.max(9, fps + 2)
+        : actuallyMoving
+          ? Math.max(7, fps)
+          : Math.max(6, Math.min(8, fps));
+    frameIdx = Math.floor(globalT * activeFps) % frameCount;
+  } else if (isChargeOrAttack && frameCount >= 4 && tNorm > 0.35 && tNorm < 0.72) {
     frameIdx =
       typeof pose.spriteFrame === 'number' && Number.isFinite(pose.spriteFrame)
         ? Math.abs(Math.floor(pose.spriteFrame)) % frameCount
         : frameCount - 1;
   } else if (actuallyMoving && frameCount > 1) {
-    const moveFps = actionStr.includes('run') || isChargeOrAttack ? Math.max(8, fps + 2) : fps;
+    const moveFps = isRunOrFlee || isChargeOrAttack ? Math.max(8, fps + 2) : fps;
     if (frameCount >= 4) {
-      // Cycle stride frames smoothly across walk frames (0, 1, 2, 1) or all frames
       const walkCycle = [1, 2, 1, 0];
       frameIdx = walkCycle[Math.floor(globalT * moveFps) % walkCycle.length];
     } else if (frameCount >= 3) {
@@ -427,7 +441,6 @@ export function drawSpriteSheetActor(
   } else if (typeof pose.spriteFrame === 'number' && Number.isFinite(pose.spriteFrame)) {
     frameIdx = Math.abs(Math.floor(pose.spriteFrame)) % frameCount;
   } else {
-    // Gentle idle breathing / grazing animation across available frames
     frameIdx = Math.floor(globalT * Math.min(3.5, fps)) % Math.min(2, frameCount);
   }
 
@@ -438,8 +451,8 @@ export function drawSpriteSheetActor(
     const cellH = img.naturalHeight / rows;
     if (cellW > 0 && cellH > 0) {
       const aspect = cellW / cellH;
-      const targetH = 216 * totalScale;
-      drawW = Math.min(340 * totalScale, Math.max(150 * totalScale, targetH * aspect));
+      const targetH = (rows >= 2 ? 256 : 216) * totalScale;
+      drawW = Math.min(360 * totalScale, Math.max(150 * totalScale, targetH * aspect));
       drawH = drawW / aspect;
     }
   }
@@ -451,8 +464,10 @@ export function drawSpriteSheetActor(
   ctx.ellipse(worldX, groundY + 4, Math.min(115 * totalScale, drawW * 0.34), 12 * totalScale, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Subtle walk bounce when moving
-  const walkBounce = actuallyMoving ? Math.abs(Math.sin(globalT * 10)) * 6 : 0;
+  // Subtle walk bounce (keep smaller on 8-frame sheets where stride height is already animated in the frames)
+  const walkBounce = actuallyMoving
+    ? Math.abs(Math.sin(globalT * 10)) * (isMultiFrameSheet ? 2.5 : 6)
+    : 0;
 
   ctx.translate(worldX, worldY - drawH / 2 - walkBounce);
   ctx.rotate((pose.rotationDeg * Math.PI) / 180);
@@ -463,6 +478,7 @@ export function drawSpriteSheetActor(
     const cellH = img.naturalHeight / rows;
     const col = frameIdx % cols;
     const row = Math.floor(frameIdx / cols) % rows;
+    const groundPadOffset = (rows >= 2 ? 18 : 10) * totalScale;
     ctx.drawImage(
       img,
       col * cellW,
@@ -470,7 +486,7 @@ export function drawSpriteSheetActor(
       cellW,
       cellH,
       -drawW / 2,
-      -drawH / 2 + 10 * totalScale,
+      -drawH / 2 + groundPadOffset,
       drawW,
       drawH
     );
