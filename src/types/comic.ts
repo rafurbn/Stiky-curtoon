@@ -7,7 +7,7 @@ export type PaperTheme =
 
 export type LayoutMode = '1-panel' | '2-panel' | '3-panel' | '4-panel';
 
-export type CharacterId = 'rafu' | 'folk' | 'boss' | 'chacha' | 'friend';
+export type CharacterId = 'rafu' | 'folk' | 'boss' | 'chacha' | 'friend' | (string & {});
 
 export type ExpressionType =
   | 'happy'
@@ -185,7 +185,8 @@ export type VideoAction =
   | 'door_peek'
   | 'collapsed_mess'
   | 'dramatic_closeup'
-  | 'charge_butt';
+  | 'charge_butt'
+  | (string & {});
 
 export type VideoProp =
   | 'none'
@@ -201,7 +202,8 @@ export type VideoProp =
   | 'smartphone'
   | 'money'
   | 'laptop'
-  | 'clock';
+  | 'clock'
+  | (string & {});
 
 export type VideoSfx =
   | 'none'
