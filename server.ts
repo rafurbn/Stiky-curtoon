@@ -21,6 +21,7 @@ const SAVED_VIDEOS_INDEX = path.join(SAVED_VIDEOS_DIR, 'index.json');
 const SAVED_PROJECTS_FILE = path.join(DATA_DIR, 'video-projects.json');
 const CUSTOM_ASSETS_DIR = path.join(DATA_DIR, 'custom-assets');
 const CUSTOM_ASSETS_INDEX = path.join(CUSTOM_ASSETS_DIR, 'index.json');
+const PUBLIC_ASSETS_ROOT = path.resolve(__dirname, 'public', 'assets');
 const PUBLIC_BACKGROUNDS_DIR = path.resolve(__dirname, 'public', 'assets', 'backgrounds');
 const PUBLIC_ACTORS_DIR = path.resolve(__dirname, 'public', 'assets', 'actors');
 
@@ -319,17 +320,108 @@ const BUILTIN_ASSET_DEFS: HybridAssetMeta[] = [
     url: '/assets/backgrounds/tea_stall_day.svg',
   },
   {
-    id: 'cow',
-    name: 'দেশি গরু (৪-ফ্রেম স্প্রাইট)',
-    keywords: ['গরু', 'গাভী', 'ষাঁড়', 'গুতো', 'বাছুর', 'cow', 'bull', 'cattle'],
+    id: 'cow_grass_eating',
+    name: 'গরু ঘাস খাচ্ছে (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['গরু', 'গুরু', 'গাভী', 'ঘাস', 'খাচ্ছে', 'চরে', 'সবুজ মাঠ', 'শান্ত গরু', 'cow', 'cow grass eating', 'grazing', 'eat grass', 'idle'],
     category: 'sprite_actor',
     format: 'svg_spritesheet',
     source: 'builtin',
-    url: '/assets/actors/cow.svg',
+    url: '/assets/actors/cow_grass_eating.svg',
     cols: 4,
-    rows: 1,
-    frameCount: 4,
-    fps: 6,
+    rows: 2,
+    frameCount: 8,
+    fps: 7,
+  },
+  {
+    id: 'cow_mooing',
+    name: 'গরু ডাকছে / হাম্বা (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['গরু ডাকছে', 'হাম্বা', 'হাম্বাআ', 'গরু কথা', 'ডাক', 'গরু', 'গুরু', 'cow mooing', 'moo', 'talking cow', 'speaking'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/cow_mooing.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 8,
+  },
+  {
+    id: 'cow_attacking',
+    name: 'গরু তাড়া ও আক্রমণ (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['গরু তাড়া', 'গরু আক্রমণ', 'গুতো', 'গুঁতো', 'তেড়ে', 'রাগান্বিত গরু', 'ধাক্কা', 'গরু', 'গুরু', 'cow attacking', 'charge', 'attack', 'butt', 'angry cow', 'chasing'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/cow_attacking.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 9,
+  },
+  {
+    id: 'tiger_walk_roar',
+    name: 'বাঘ হাঁটছে ও গর্জন (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['বাঘ', 'রয়েল বেঙ্গল', 'বাঘ মামা', 'হালুম', 'গর্জন', 'হাঁটছে', 'জঙ্গল', 'বন', 'tiger', 'tiger walk roar', 'roar', 'walk', 'jungle'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/tiger_walk_roar.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 8,
+  },
+  {
+    id: 'tiger_run_attack',
+    name: 'বাঘ দৌড় ও ঝাঁপ (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['বাঘ দৌড়', 'বাঘ তাড়া', 'বাঘ আক্রমণ', 'ঝাঁপ', 'শিকার', 'ভয়ানক বাঘ', 'বাঘ', 'tiger run attack', 'tiger run', 'tiger attack', 'chase', 'pounce', 'running tiger'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/tiger_run_attack.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 10,
+  },
+  {
+    id: 'rafu_walk_talk',
+    name: 'রাফু হাঁটা ও কথা বলা (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['রাফু', 'রফু', 'রফু ভাই', 'ছেলে', 'হাঁটা', 'কথা', 'বন্ধু', 'rafu', 'rofu', 'rafu walk talk', 'walk', 'talk', 'boy'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/rafu_walk_talk.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 8,
+  },
+  {
+    id: 'rafu_running_away',
+    name: 'রাফু ভয়ে দৌড়ে পালাচ্ছে (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['রাফু পালাচ্ছে', 'রফু পালাচ্ছে', 'রাফু দৌড়', 'রফু দৌড়', 'পালা', 'দৌড়ে', 'ভাগ', 'রাফু', 'রফু', 'rafu running away', 'running away', 'flee', 'escape', 'run'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/rafu_running_away.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 10,
+  },
+  {
+    id: 'boy_scared',
+    name: 'রাফু / ছেলে ভয় পেয়েছে (৮-ফ্রেম স্প্রাইট)',
+    keywords: ['ভয়', 'চমকে', 'আতঙ্ক', 'কান্না', 'ভীত', 'ছেলে ভয়', 'রাফু ভয়', 'রফু ভয়', 'boy scared', 'scared', 'shocked', 'afraid', 'panicked', 'crying', 'rafu'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/boy_scared.svg',
+    cols: 4,
+    rows: 2,
+    frameCount: 8,
+    fps: 8,
   },
   {
     id: 'dog',
@@ -410,9 +502,22 @@ const BUILTIN_ASSET_DEFS: HybridAssetMeta[] = [
     fps: 7,
   },
   {
+    id: 'cow',
+    name: 'দেশি গরু পুরনো (৪-ফ্রেম স্প্রাইট)',
+    keywords: ['গরু পুরনো', 'cow legacy'],
+    category: 'sprite_actor',
+    format: 'svg_spritesheet',
+    source: 'builtin',
+    url: '/assets/actors/cow.svg',
+    cols: 4,
+    rows: 1,
+    frameCount: 4,
+    fps: 6,
+  },
+  {
     id: 'tiger',
-    name: 'রয়েল বেঙ্গল বাঘ (৪-ফ্রেম স্প্রাইট)',
-    keywords: ['বাঘ', 'সিংহ', 'জঙ্গল', 'tiger', 'lion'],
+    name: 'রয়েল বেঙ্গল বাঘ পুরনো (৪-ফ্রেম স্প্রাইট)',
+    keywords: ['বাঘ পুরনো', 'tiger legacy'],
     category: 'sprite_actor',
     format: 'svg_spritesheet',
     source: 'builtin',
@@ -527,7 +632,17 @@ async function scanFolderAssets(
           if (isSvg) {
             try {
               const svgHead = await fs.readFile(path.join(dirPath, entry.name), 'utf8');
-              if (/viewBox\s*=\s*["']0\s+0\s+1200\s+/i.test(svgHead)) {
+              const vbMatch = svgHead.match(
+                /viewBox\s*=\s*["']\s*[-0-9.]+\s+[-0-9.]+\s+([0-9.]+)\s+([0-9.]+)\s*["']/i
+              );
+              const vbW = vbMatch ? Number(vbMatch[1]) : 0;
+              const vbH = vbMatch ? Number(vbMatch[2]) : 0;
+              if (vbW >= 1280 && vbW <= 1600 && vbH >= 640 && vbH <= 900) {
+                cols = 4;
+                rows = 2;
+                frameCount = 8;
+                fps = 8;
+              } else if (/viewBox\s*=\s*["']0\s+0\s+1200\s+/i.test(svgHead)) {
                 cols = 4;
                 rows = 1;
                 frameCount = 4;
@@ -577,15 +692,17 @@ async function scanFolderAssets(
 
 async function getAllHybridAssets(): Promise<HybridAssetMeta[]> {
   const builtinIds = new Set(BUILTIN_ASSET_DEFS.map((a) => a.id));
-  const [folderBgs, folderActors, customAssets] = await Promise.all([
+  const [folderBgs, folderActors, folderRootActors, customAssets] = await Promise.all([
     scanFolderAssets(PUBLIC_BACKGROUNDS_DIR, 'background', '/assets/backgrounds', builtinIds),
     scanFolderAssets(PUBLIC_ACTORS_DIR, 'sprite_actor', '/assets/actors', builtinIds),
+    scanFolderAssets(PUBLIC_ASSETS_ROOT, 'sprite_actor', '/assets', builtinIds),
     readCustomAssetsIndex(),
   ]);
   const byId = new Map<string, HybridAssetMeta>();
   for (const a of BUILTIN_ASSET_DEFS) byId.set(a.id, a);
   for (const a of folderBgs) byId.set(a.id, a);
   for (const a of folderActors) byId.set(a.id, a);
+  for (const a of folderRootActors) if (!byId.has(a.id)) byId.set(a.id, a);
   for (const a of customAssets) byId.set(a.id, a);
   return Array.from(byId.values());
 }
@@ -1157,9 +1274,13 @@ YOUR JOB AS AN INDEPENDENT CREATIVE AI ANIMATION DIRECTOR:
    - If the script's setting is NOT in the catalog, invent a clear snake_case "backgroundAssetId" AND write a vivid "backgroundDescription" so our AI auto-draws a bespoke colorful SVG background for that scene!
 3. Cast ONLY the characters that appear in the user's script! If the script only has sprite-sheet animals/vehicles (e.g. গরু ও কুকুর, বাঘ ও ছাগল, রিকশা ও সিএনজি), DO NOT invent unrelated human characters! Keep the user's exact character names ("name") and spoken words ("speech") faithful.
 4. SPRITE-SHEET ACTORS vs HUMANS:
-   - Any character matching our Sprite Actor catalog (uploaded custom sprite sheets OR built-in animals/vehicles, including typos like "গুরু" -> "গরু"): set kind="sprite_actor", renderStyle="cartoon_2d", and set the matching "spriteAssetId" for each scene! If multiple uploaded sheets exist for different actions of the same character, pick the best matching "spriteAssetId" per scene!
-   - Any human character in the script: set kind="human_rig", pick a fitting "outfitStyle", and animate with articulated limb keyframes.
-5. Break the script naturally into 2 to 8 expressive scenes (each 2.5–8.5s). Use descriptive freeform "action" values matching the story (e.g., "grazing", "walk_in", "run", "chasing", "arguing", "charge_butt", "dancing", "shocked_jump", "idle", etc.).
+   - Whenever গরু (cow), বাঘ (tiger), or রাফু/রফু/ছেলে (Rafu/boy) appear, ALWAYS set kind="sprite_actor", renderStyle="cartoon_2d", and pick the matching 8-frame spriteAssetId per scene action:
+     * গরু: "cow_grass_eating" (grazing/idle/walking calmly), "cow_mooing" (mooing/speaking/হাম্বা), "cow_attacking" (charging/chasing/angry/গুতো)
+     * বাঘ: "tiger_walk_roar" (walking/roaring/talking/idle), "tiger_run_attack" (running/chasing/pouncing/attacking)
+     * রাফু / রফু / ছেলে: "rafu_walk_talk" (walking/talking/idle), "boy_scared" (scared/shocked/crying/panicked), "rafu_running_away" (running away/fleeing/escaping)
+   - Any other character matching our Sprite Actor catalog (কুকুর, ছাগল, বিড়াল, কাক, রিকশা, সিএনজি, or user-uploaded custom sheets): set kind="sprite_actor", renderStyle="cartoon_2d", and set the matching "spriteAssetId" per scene!
+   - Any other human character (ফোক, চাচা, বস, দোকানদার) with NO sprite sheet: set kind="human_rig", pick a fitting "outfitStyle", and animate with articulated limb keyframes.
+5. Break the script naturally into 2 to 8 expressive scenes (each 2.5–8.5s). Use descriptive freeform "action" values matching the story (e.g., "grazing", "mooing", "walk_in", "run", "flee", "scared", "chasing", "roar", "charge_butt", "shocked_jump", "idle", etc.).
 6. SILENT VS SPOKEN CHARACTERS: Only give spoken "speech" lines to characters who actually speak or make sounds in the script. If an animal acts silently in a scene, set speech="" and tell the action via captionTop, keyframes, effects, and sfxCues!`
       : `CREATE AN ORIGINAL, 100% COPYRIGHT-FREE BENGALI SHORT VIDEO FREELY:
 ${
@@ -1541,6 +1662,79 @@ Output JSON with:
       return score;
     };
 
+    const selectActionAwareEightFrameId = (
+      charName: string,
+      charAction: string,
+      charExpr: string,
+      charSpeech: string,
+      requestedId: string,
+      sceneCaption: string
+    ): HybridAssetMeta | undefined => {
+      const nameLow = charName.toLowerCase().replace(/গুরু/g, 'গরু');
+      const spLow = requestedId.toLowerCase();
+      const ctxLow = `${charAction} ${charExpr} ${charSpeech} ${sceneCaption}`.toLowerCase();
+
+      const findById = (id: string) =>
+        spriteCatalog.find((a) => a.id.toLowerCase() === id.toLowerCase());
+
+      if (
+        spLow.startsWith('cow') ||
+        /(গরু|গাভী|ষাঁড়|বাছুর|\bcow\b|\bbull\b|\bcattle\b)/.test(nameLow)
+      ) {
+        if (
+          spLow === 'cow_attacking' ||
+          charExpr.toLowerCase() === 'angry' ||
+          /(attack|charge|butt|chase|angry|গুতো|গুঁতো|তাড়া|তেড়ে|আক্রমণ|ধাক্কা|রাগ)/.test(ctxLow)
+        ) {
+          return findById('cow_attacking');
+        }
+        if (
+          spLow === 'cow_mooing' ||
+          charSpeech.trim().length > 0 ||
+          /(moo|হাম্বা|ডাক|talk|speak|কথা)/.test(ctxLow)
+        ) {
+          return findById('cow_mooing');
+        }
+        return findById('cow_grass_eating');
+      }
+
+      if (
+        spLow.startsWith('tiger') ||
+        /(বাঘ|রয়েল|সিংহ|\btiger\b|\blion\b)/.test(nameLow)
+      ) {
+        if (
+          spLow === 'tiger_run_attack' ||
+          /(run|attack|chase|pounce|jump|charge|দৌড়|তাড়া|ঝাঁপ|আক্রমণ|শিকার)/.test(ctxLow)
+        ) {
+          return findById('tiger_run_attack');
+        }
+        return findById('tiger_walk_roar');
+      }
+
+      if (
+        spLow.startsWith('rafu') ||
+        spLow === 'boy_scared' ||
+        /(রাফু|রফু|rafu|rofu|ছেলে|বালক|\bboy\b)/.test(nameLow)
+      ) {
+        if (
+          spLow === 'rafu_running_away' ||
+          /(run|flee|escape|দৌড়|পালা|ভাগ)/.test(ctxLow)
+        ) {
+          return findById('rafu_running_away');
+        }
+        if (
+          spLow === 'boy_scared' ||
+          ['shocked', 'crying', 'exhausted', 'confused'].includes(charExpr.toLowerCase()) ||
+          /(scared|shocked|afraid|fear|panick|scream|jump|cry|ভয়|আতঙ্ক|চমক|কান্না|ওরে|বাঁচাও)/.test(ctxLow)
+        ) {
+          return findById('boy_scared');
+        }
+        return findById('rafu_walk_talk');
+      }
+
+      return undefined;
+    };
+
     const pickBestSpriteForContext = (
       charName: string,
       charContext: string,
@@ -1554,8 +1748,9 @@ Output JSON with:
       let bestScore = 0;
 
       for (const asset of spriteCatalog) {
-        const score = scoreAssetMatch(asset, normalizedQuery, reqLow);
-        if (score > bestScore) {
+        const multiFrameBonus = (asset.frameCount || 1) >= 8 ? 3 : 0;
+        const score = scoreAssetMatch(asset, normalizedQuery, reqLow) + multiFrameBonus;
+        if (score > bestScore && score > multiFrameBonus) {
           bestScore = score;
           best = asset;
         }
@@ -1568,6 +1763,8 @@ Output JSON with:
     const nameMatchesSpriteCatalog = (charName: string): HybridAssetMeta | undefined => {
       const cleanName = charName.toLowerCase().replace(/গুরু/g, 'গরু').trim();
       if (!cleanName) return undefined;
+      const eightFrameDefault = selectActionAwareEightFrameId(charName, '', '', '', '', '');
+      if (eightFrameDefault) return eightFrameDefault;
       let best: HybridAssetMeta | undefined;
       let bestScore = 0;
       for (const asset of spriteCatalog) {
@@ -1689,7 +1886,7 @@ Output JSON with:
       const resolvedChars = [];
       for (const ch of rawChars) {
         const nextCh = { ...ch };
-        nextCh.id = String(nextCh.id || 'rafu');
+        nextCh.id = String(nextCh.id || 'actor');
         nextCh.action = String(nextCh.action || 'idle');
         nextCh.prop = String(nextCh.prop || 'none');
 
@@ -1698,22 +1895,48 @@ Output JSON with:
           typeof nextCh.spriteAssetId === 'string' ? nextCh.spriteAssetId.trim() : '';
         const spDesc =
           typeof nextCh.actorDescription === 'string' ? nextCh.actorDescription.trim() : '';
+        const charSpeech = String(nextCh.speech || '');
+        const charExpr = String(nextCh.expression || 'happy');
 
-        // Strictly separate human_rig from sprite_actor unless the character's OWN name explicitly matches a sprite sheet
-        const nameSpriteMatch = nameMatchesSpriteCatalog(charName);
+        // Priority 1: Action-aware 8-frame sheets for গরু, বাঘ, রাফু/রফু/ছেলে
+        const eightFrameMatch = selectActionAwareEightFrameId(
+          charName,
+          String(nextCh.action),
+          charExpr,
+          charSpeech,
+          spId,
+          String(sc.captionTop || '')
+        );
+
+        // Strictly separate human_rig from sprite_actor unless character matches 8-frame sheets or catalog sprite
+        const nameSpriteMatch = eightFrameMatch || nameMatchesSpriteCatalog(charName);
         const shouldResolveAsSprite =
+          Boolean(eightFrameMatch) ||
           nextCh.kind === 'sprite_actor' ||
           Boolean(spId) ||
           Boolean(nameSpriteMatch);
 
         if (shouldResolveAsSprite) {
-          const charCtx = `${spDesc} ${String(nextCh.action || '')} ${String(nextCh.speech || '')}`;
+          const charCtx = `${spDesc} ${String(nextCh.action || '')} ${charSpeech}`;
           const matchedSprite =
-            pickBestSpriteForContext(charName, charCtx, spId) || nameSpriteMatch;
+            eightFrameMatch ||
+            pickBestSpriteForContext(charName, charCtx, spId) ||
+            nameSpriteMatch;
 
           nextCh.kind = 'sprite_actor';
           if (matchedSprite) {
             nextCh.spriteAssetId = matchedSprite.id;
+            // Clear static spriteFrame pins on 8-frame sheets so all 8 frames animate smoothly
+            if ((matchedSprite.frameCount || 1) > 4 && Array.isArray(nextCh.keyframes)) {
+              nextCh.keyframes = nextCh.keyframes.map((kf) => {
+                if (kf && typeof kf === 'object') {
+                  const copy = { ...(kf as Record<string, unknown>) };
+                  delete copy.spriteFrame;
+                  return copy;
+                }
+                return kf;
+              });
+            }
           } else if (spId && !knownAssetIds.has(spId.toLowerCase())) {
             const cacheKey = `actor:${spId.toLowerCase()}`;
             if (autoSvgCache.has(cacheKey)) {
