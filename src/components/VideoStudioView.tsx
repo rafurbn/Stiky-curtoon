@@ -9,6 +9,7 @@ import {
   Mic,
   Pause,
   Play,
+  RefreshCw,
   RotateCcw,
   Save,
   Send,
@@ -50,6 +51,7 @@ import {
   findAssetByIdOrTheme,
   getCachedAssetCatalog,
   getClientCustomAssetSummaries,
+  isAudioAssetCategory,
   preloadScriptAssets,
   refreshAssetCatalog,
   resolveSpriteAssetForCharacter,
@@ -146,7 +148,9 @@ export function VideoStudioView({
   const [elapsedSec, setElapsedSec] = useState(0);
 
   // Only essential user choices
-  const [creationMode, setCreationMode] = useState<'custom_script' | 'auto'>('custom_script');
+  const [creationMode, setCreationMode] = useState<'local_script' | 'custom_script' | 'auto'>(
+    'local_script'
+  );
   const [styleChoice, setStyleChoice] = useState<'auto' | VideoRenderStyle>('auto');
   const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>(video.aspectRatio || '9:16');
   const [customScript, setCustomScript] = useState('');
@@ -156,6 +160,7 @@ export function VideoStudioView({
   const [showAdvancedEditor, setShowAdvancedEditor] = useState(false);
 
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationFailed, setGenerationFailed] = useState(false);
   const [isSynthesizingVoices, setIsSynthesizingVoices] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [renderPct, setRenderPct] = useState(0);
@@ -179,6 +184,7 @@ export function VideoStudioView({
   const totalDuration = video.scenes.reduce((acc, s) => acc + Math.max(1.5, s.durationSec), 0);
 
   useEffect(() => {
+    fetch('/api/health').catch(() => {});
     preloadThemeBackgrounds().catch(() => {});
     refreshAssetCatalog()
       .then((list) => {
@@ -205,6 +211,7 @@ export function VideoStudioView({
     setLastRendered(null);
     setElapsedSec(0);
     setIsPlaying(false);
+    setGenerationFailed(false);
   }, [video.id]);
 
   const stopPlayback = useCallback(() => {
@@ -252,7 +259,7 @@ export function VideoStudioView({
       const sc = target.scenes[sIdx];
       for (let cIdx = 0; cIdx < sc.characters.length; cIdx++) {
         const ch = sc.characters[cIdx];
-        if (ch.customAudioDataUrl) continue;
+        if (ch.customAudioDataUrl || ch.customAudioUrl || ch.customAudioAssetId) continue;
         const speech = (ch.speech || '').trim();
         if (!speech) continue;
         const matched = existing.find(
@@ -378,7 +385,10 @@ export function VideoStudioView({
   };
 
   const handleGenerateVideo = async () => {
-    if (creationMode === 'custom_script' && !customScript.trim()) {
+    if (
+      (creationMode === 'local_script' || creationMode === 'custom_script') &&
+      !customScript.trim()
+    ) {
       setStatusMsg({
         type: 'err',
         text: 'অনুগ্রহ করে আপনার গল্প বা সংলাপটি নিচের বক্সে লিখুন, অথবা "AI অটো গল্প" বেছে নিন।',
@@ -388,6 +398,7 @@ export function VideoStudioView({
 
     stopPlayback();
     setIsGenerating(true);
+    setGenerationFailed(false);
     setStatusMsg(null);
     setLastRendered(null);
 
@@ -399,7 +410,10 @@ export function VideoStudioView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mode: creationMode,
-          customScript: creationMode === 'custom_script' ? customScript : '',
+          customScript:
+            creationMode === 'local_script' || creationMode === 'custom_script'
+              ? customScript
+              : '',
           customHint: creationMode === 'auto' ? customHint : '',
           renderStyle: styleChoice,
           aspectRatio,
@@ -419,6 +433,7 @@ export function VideoStudioView({
       const freshAssets = await refreshAssetCatalog().catch(() => hybridAssets);
       setHybridAssets(freshAssets);
       await preloadScriptAssets(newVideo).catch(() => {});
+      await prepareLipSyncForScript(newVideo).catch(() => {});
       setAssetLoadTick((t) => t + 1);
       onCreateVideo(newVideo);
 
@@ -433,6 +448,7 @@ export function VideoStudioView({
         text: 'সবকিছু প্রস্তুত! এখন Play চাপুন অথবা MP4 হিসেবে সেইভ করুন।',
       });
     } catch (err) {
+      setGenerationFailed(true);
       setStatusMsg({
         type: 'err',
         text: err instanceof Error ? err.message : 'ভিডিও তৈরি ব্যর্থ হয়েছে।',
@@ -665,7 +681,18 @@ export function VideoStudioView({
           <section className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
             {/* Creation Mode Tabs + Essential Style Switch */}
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+              <div className="flex flex-wrap items-center gap-1 rounded-lg bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => setCreationMode('local_script')}
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                    creationMode === 'local_script'
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  লোকাল স্ক্রিপ্ট (৫০৩-মুক্ত)
+                </button>
                 <button
                   type="button"
                   onClick={() => setCreationMode('custom_script')}
@@ -675,7 +702,7 @@ export function VideoStudioView({
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  নিজে স্ক্রিপ্ট লিখুন
+                  AI স্ক্রিপ্ট
                 </button>
                 <button
                   type="button"
@@ -686,7 +713,7 @@ export function VideoStudioView({
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  AI দিয়ে অটো গল্প
+                  AI অটো গল্প
                 </button>
               </div>
 
@@ -742,25 +769,27 @@ export function VideoStudioView({
               </div>
             </div>
 
-            {creationMode === 'custom_script' ? (
+            {creationMode !== 'auto' ? (
               <div className="space-y-3">
                 <textarea
                   rows={6}
                   value={customScript}
                   onChange={(e) => setCustomScript(e.target.value)}
-                  placeholder={`আপনার স্প্রাইট চরিত্র (গরু, বাঘ, রফু/রাফু) ও পটভূমি অনুযায়ী যেকোনো গল্প লিখুন...\n\nউদাহরণ:\nসবুজ মাঠে রফু হাঁটছে আর গরু আরামে ঘাস খাচ্ছে।\nহঠাৎ জঙ্গল থেকে বাঘ হালুম করে হাঁটতে হাঁটতে সামনে এলো!\nরফু ভয় পেয়ে চিৎকার করে দৌড়ে পালাল, আর গরু রেগে বাঘকে তাড়া করল!`}
+                  placeholder={`আপনার স্প্রাইট চরিত্র (গরু, বাঘ, রফু/রাফু) ও গান/মিউজিক অনুযায়ী গল্প লিখুন...\n\nউদাহরণ:\nরফু গান গাইতে গাইতে মাঠ দিয়ে হেটে যাচ্ছে: গুরু উপায় বল না।\nহাঁটতে হাঁটতে মাঠে একটি গরুর পাশে আসে।\nগরু গান শুনে রাগান্বিতভাবে হাম্বা ডাকবে এবং গুঁতো দিয়ে রফুকে দৌড়ানি দিবে।`}
                   className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none"
                 />
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
                   <span>
-                    যেকোনো গল্প ও পটভূমি লিখুন — AI স্প্রাইট, দৃশ্য, ক্যামেরা ও ভয়েস স্বাধীনভাবে সাজিয়ে নেবে
+                    {creationMode === 'local_script'
+                      ? 'লোকাল ডিরেক্টর: সম্পূর্ণ খরচশূন্য, তাৎক্ষণিক ও ৫০৩-মুক্ত — আপনার স্প্রাইট, ব্যাকগ্রাউন্ড ও MP3 স্বয়ংক্রিয়ভাবে সাজাবে'
+                      : 'AI ডিরেক্টর: অজানা দৃশ্য বা নতুন সংলাপ Gemini AI দিয়ে সাজাবে'}
                   </span>
                   {!customScript.trim() && (
                     <button
                       type="button"
                       onClick={() =>
                         setCustomScript(
-                          'সবুজ মাঠে রফু মনের আনন্দে হাঁটছে আর গরু ঘাস খাচ্ছে।\nহঠাৎ বাঘ হালুম করে সামনে এসে গর্জন করল!\nরফু (ভয়ে): ওরে বাবা রে! বাঘ এসেছে, বাঁচাও!\nবাঘ তাড়া করতেই রফু দৌড়ে পালাল, আর সাহসী গরু রেগে হাম্বা বলে বাঘকে গুতো দিতে তেড়ে এলো!'
+                          'রফু গান গাইতে গাইতে মাঠ দিয়ে হেটে যাচ্ছে: গুরু উপায় বল না।\nহাঁটতে হাঁটতে মাঠে একটি গরুর পাশে আসে।\nগরু গান শুনে রাগান্বিতভাবে হাম্বা ডাকবে এবং গুঁতো দিয়ে রফুকে দৌড়ানি দিবে।'
                         )
                       }
                       className="font-semibold text-slate-700 underline underline-offset-2 hover:text-slate-900 whitespace-nowrap"
@@ -785,12 +814,12 @@ export function VideoStudioView({
               </div>
             )}
 
-            {/* Available Sprite Sheets & Backgrounds Helper */}
+            {/* Available Sprite Sheets, Backgrounds & Audio Helper */}
             {hybridAssets.length > 0 && (
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                   <span className="font-semibold text-slate-800">
-                    স্টুডিওতে যুক্ত স্প্রাইট শিট ও ব্যাকগ্রাউন্ড
+                    স্টুডিওতে যুক্ত স্প্রাইট, ব্যাকগ্রাউন্ড ও অডিও
                   </span>
                   <span className="text-[11px] text-slate-500">
                     নামে ক্লিক করলে স্ক্রিপ্টে যুক্ত হবে
@@ -811,7 +840,7 @@ export function VideoStudioView({
                             key={a.id}
                             type="button"
                             onClick={() => {
-                              if (creationMode === 'custom_script') {
+                              if (creationMode !== 'auto') {
                                 setCustomScript((prev) =>
                                   prev.trim() ? `${prev.trimEnd()} ${shortLabel}` : shortLabel
                                 );
@@ -844,7 +873,40 @@ export function VideoStudioView({
                             key={a.id}
                             type="button"
                             onClick={() => {
-                              if (creationMode === 'custom_script') {
+                              if (creationMode !== 'auto') {
+                                setCustomScript((prev) =>
+                                  prev.trim() ? `${prev.trimEnd()} (${shortLabel})` : shortLabel
+                                );
+                              } else {
+                                setCustomHint((prev) =>
+                                  prev.trim() ? `${prev.trimEnd()} (${shortLabel})` : shortLabel
+                                );
+                              }
+                            }}
+                            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:border-slate-400 hover:text-slate-900 whitespace-nowrap"
+                          >
+                            {shortLabel}
+                          </button>
+                        );
+                      })}
+                  </div>
+                )}
+
+                {hybridAssets.some((a) => isAudioAssetCategory(a.category)) && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-slate-500 mr-1">
+                      গান / মিউজিক:
+                    </span>
+                    {hybridAssets
+                      .filter((a) => isAudioAssetCategory(a.category))
+                      .map((a) => {
+                        const shortLabel = a.name.replace(/\s*\(.*?\)\s*/g, '').trim() || a.id;
+                        return (
+                          <button
+                            key={a.id}
+                            type="button"
+                            onClick={() => {
+                              if (creationMode !== 'auto') {
                                 setCustomScript((prev) =>
                                   prev.trim() ? `${prev.trimEnd()} (${shortLabel})` : shortLabel
                                 );
@@ -874,14 +936,38 @@ export function VideoStudioView({
               <Wand2 className="h-4 w-4" />
               <span>
                 {isGenerating
-                  ? 'AI স্ক্রিপ্ট ও দৃশ্য সাজাচ্ছে...'
+                  ? 'স্ক্রিপ্ট ও দৃশ্য সাজাচ্ছে...'
                   : isSynthesizingVoices
                     ? 'লাউড বাংলা ডাবিং ও লিপ-সিংক তৈরি হচ্ছে...'
-                    : creationMode === 'custom_script'
-                      ? 'আমার স্ক্রিপ্ট থেকে ভিডিও বানান'
-                      : 'AI দিয়ে সম্পূর্ণ নতুন ভিডিও বানান'}
+                    : creationMode === 'local_script'
+                      ? 'লোকাল স্ক্রিপ্ট থেকে তাৎক্ষণিক ভিডিও বানান'
+                      : creationMode === 'custom_script'
+                        ? 'AI দিয়ে স্ক্রিপ্ট থেকে ভিডিও বানান'
+                        : 'AI দিয়ে সম্পূর্ণ নতুন ভিডিও বানান'}
               </span>
             </button>
+
+            {statusMsg && (
+              <div
+                className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3.5 py-2.5 text-xs font-semibold ${
+                  statusMsg.type === 'ok'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : 'border-red-200 bg-red-50 text-red-800'
+                }`}
+              >
+                <span>{statusMsg.text}</span>
+                {statusMsg.type === 'err' && !isGenerating && (
+                  <button
+                    type="button"
+                    onClick={handleGenerateVideo}
+                    className="inline-flex items-center gap-1 rounded-md border border-red-300 bg-white px-2.5 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100 whitespace-nowrap shrink-0"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    <span>আবার চেষ্টা করুন</span>
+                  </button>
+                )}
+              </div>
+            )}
           </section>
 
           {/* Recent Projects Strip */}
@@ -1002,6 +1088,7 @@ export function VideoStudioView({
                     }
                     className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900"
                   >
+                    <option value="folk">বাংলার ফোক / দোতারা সুর</option>
                     <option value="cinematic_parody">ড্রামাটিক প্যারোডি</option>
                     <option value="comedy">কমেডি পপ</option>
                     <option value="quirky">মজার কুইর্কি</option>
@@ -1027,6 +1114,36 @@ export function VideoStudioView({
                     <option value="reels_bold">বোল্ড কালো বক্স Reels</option>
                   </select>
                 </div>
+
+                {hybridAssets.some((a) => a.category === 'audio_bgm') && (
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">
+                      লাইব্রেরি থেকে নিজস্ব BGM (MP3/WAV)
+                    </label>
+                    <select
+                      value={video.customBgmAssetId || ''}
+                      onChange={(e) => {
+                        const selected = hybridAssets.find((a) => a.id === e.target.value);
+                        onUpdateVideo({
+                          ...video,
+                          customBgmAssetId: selected ? selected.id : undefined,
+                          customBgmUrl: selected ? selected.url : undefined,
+                          customBgmName: selected ? selected.name : undefined,
+                        });
+                      }}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900"
+                    >
+                      <option value="">ডিফল্ট সিন্থেসাইজড মিউজিক ব্যবহার করুন</option>
+                      {hybridAssets
+                        .filter((a) => a.category === 'audio_bgm')
+                        .map((bgm) => (
+                          <option key={bgm.id} value={bgm.id}>
+                            {bgm.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1205,7 +1322,55 @@ export function VideoStudioView({
                                     }
                                   />
                                 </label>
-                                {ch.customAudioDataUrl && (
+                                {hybridAssets.some(
+                                  (a) => a.category === 'audio_song' || a.category === 'audio_sfx'
+                                ) && (
+                                  <select
+                                    value={ch.customAudioAssetId || ''}
+                                    onChange={(e) => {
+                                      const picked = hybridAssets.find(
+                                        (a) => a.id === e.target.value
+                                      );
+                                      const next = video.scenes.map((item, i) =>
+                                        i === sIdx
+                                          ? {
+                                              ...item,
+                                              characters: item.characters.map((cc, j) =>
+                                                j === cIdx
+                                                  ? {
+                                                      ...cc,
+                                                      customAudioAssetId: picked
+                                                        ? picked.id
+                                                        : undefined,
+                                                      customAudioUrl: picked
+                                                        ? picked.url
+                                                        : undefined,
+                                                    }
+                                                  : cc
+                                              ),
+                                            }
+                                          : item
+                                      );
+                                      onUpdateVideo({ ...video, scenes: next });
+                                    }}
+                                    className="max-w-[140px] rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700"
+                                  >
+                                    <option value="">লাইব্রেরি গান/SFX</option>
+                                    {hybridAssets
+                                      .filter(
+                                        (a) =>
+                                          a.category === 'audio_song' || a.category === 'audio_sfx'
+                                      )
+                                      .map((a) => (
+                                        <option key={a.id} value={a.id}>
+                                          {a.name}
+                                        </option>
+                                      ))}
+                                  </select>
+                                )}
+                                {(ch.customAudioDataUrl ||
+                                  ch.customAudioUrl ||
+                                  ch.customAudioAssetId) && (
                                   <button
                                     type="button"
                                     onClick={() => {
@@ -1215,7 +1380,12 @@ export function VideoStudioView({
                                               ...item,
                                               characters: item.characters.map((cc, j) =>
                                                 j === cIdx
-                                                  ? { ...cc, customAudioDataUrl: undefined }
+                                                  ? {
+                                                      ...cc,
+                                                      customAudioDataUrl: undefined,
+                                                      customAudioUrl: undefined,
+                                                      customAudioAssetId: undefined,
+                                                    }
                                                   : cc
                                               ),
                                             }
@@ -1416,9 +1586,18 @@ export function VideoStudioView({
         {/* RIGHT: Live 9:16 Video Preview + Render & Save */}
         <div className="space-y-5 lg:col-span-5">
           <div className="rounded-xl border border-slate-200 bg-white p-5">
+            {generationFailed && (
+              <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                সতর্কতা: নতুন স্ক্রিপ্ট এখনো তৈরি হয়নি — নিচের প্লেয়ারটি আগের প্রজেক্টের। রেন্ডার করার আগে “লোকাল স্ক্রিপ্ট” দিয়ে বানান অথবা AI আবার চেষ্টা করুন।
+              </div>
+            )}
+
             <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-bold text-slate-900">লাইভ প্রিভিউ ও MP4 রেন্ডার</h2>
-              <span className="font-mono-tabular text-xs text-slate-500">
+              <div className="min-w-0">
+                <h2 className="text-sm font-bold text-slate-900">লাইভ প্রিভিউ ও MP4 রেন্ডার</h2>
+                <p className="truncate text-[11px] text-slate-500">চলমান প্রজেক্ট: {video.title}</p>
+              </div>
+              <span className="font-mono-tabular text-xs text-slate-500 shrink-0">
                 {elapsedSec.toFixed(1)}s / {totalDuration.toFixed(1)}s
               </span>
             </div>

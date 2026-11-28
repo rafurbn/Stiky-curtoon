@@ -3,6 +3,7 @@ import {
   FolderOpen,
   Image as ImageIcon,
   Layers,
+  Music,
   Sparkles,
   Trash2,
   Upload,
@@ -10,8 +11,10 @@ import {
 import type { HybridAssetCategory, HybridAssetItem } from '../types/comic';
 import {
   getCachedAssetCatalog,
+  isAudioAssetCategory,
   loadImageFromUrl,
   refreshAssetCatalog,
+  resolveAssetUrlWithBackup,
 } from '../lib/hybridSpriteCatalog';
 import {
   deleteCustomAssetFromVault,
@@ -154,7 +157,7 @@ interface AssetLibraryViewProps {
 
 export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
   const [assets, setAssets] = useState<HybridAssetItem[]>(() => getCachedAssetCatalog());
-  const [filterCat, setFilterCat] = useState<'all' | 'background' | 'sprite_actor'>('all');
+  const [filterCat, setFilterCat] = useState<'all' | 'background' | 'sprite_actor' | 'audio'>('all');
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   // Upload form state
@@ -200,6 +203,18 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
     }
     setUploadFile(file);
     setUploadPreviewUrl(URL.createObjectURL(file));
+    const lowerName = file.name.toLowerCase();
+    const isAudio =
+      file.type.startsWith('audio/') ||
+      ['.mp3', '.wav', '.ogg', '.m4a'].some((ext) => lowerName.endsWith(ext));
+    if (isAudio && !isAudioAssetCategory(uploadCategory)) {
+      setUploadCategory('audio_song');
+    } else if (!isAudio && isAudioAssetCategory(uploadCategory)) {
+      setUploadCategory('sprite_actor');
+      setUploadCols(4);
+      setUploadRows(1);
+      setUploadFrameCount(4);
+    }
     if (!uploadName.trim()) {
       setUploadName(file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '));
     }
@@ -208,7 +223,10 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadFile) {
-      setStatusMsg({ type: 'err', text: 'অনুগ্রহ করে একটি .svg বা .png ফাইল নির্বাচন করুন।' });
+      setStatusMsg({
+        type: 'err',
+        text: 'অনুগ্রহ করে একটি SVG, PNG, MP3 অথবা WAV ফাইল নির্বাচন করুন।',
+      });
       return;
     }
     setIsUploading(true);
@@ -324,24 +342,30 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
   };
 
   const filteredAssets = assets.filter((a) =>
-    filterCat === 'all' ? true : a.category === filterCat
+    filterCat === 'all'
+      ? true
+      : filterCat === 'audio'
+        ? isAudioAssetCategory(a.category)
+        : a.category === filterCat
   );
   const bgCount = assets.filter((a) => a.category === 'background').length;
   const actorCount = assets.filter((a) => a.category === 'sprite_actor').length;
+  const audioCount = assets.filter((a) => isAudioAssetCategory(a.category)).length;
+  const isUploadingAudio = isAudioAssetCategory(uploadCategory);
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900">
-            হাইব্রিড স্প্রাইট ও ব্যাকগ্রাউন্ড লাইব্রেরি
+            হাইব্রিড স্প্রাইট, ব্যাকগ্রাউন্ড ও অডিও লাইব্রেরি
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            দেশীয় পরিবেশ, গরু-বাঘ-রফু ৮-ফ্রেম (৪x২) ও ৪-ফ্রেম স্প্রাইট শিট, নিজস্ব SVG/PNG আপলোড এবং ফ্রি AI জেনারেটর
+            স্প্রাইট শিট, ব্যাকগ্রাউন্ড ও নিজস্ব MP3/WAV গান, মিউজিক (BGM) ও সাউন্ড ইফেক্ট (SFX) একসাথে পরিচালনা করুন
           </p>
         </div>
 
-        <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+        <div className="flex flex-wrap items-center gap-1 rounded-lg bg-slate-100 p-1">
           <button
             type="button"
             onClick={() => setFilterCat('all')}
@@ -371,6 +395,15 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
           >
             প্রাণী ও স্প্রাইট ({actorCount})
           </button>
+          <button
+            type="button"
+            onClick={() => setFilterCat('audio')}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+              filterCat === 'audio' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+            }`}
+          >
+            গান ও মিউজিক ({audioCount})
+          </button>
         </div>
       </div>
 
@@ -386,9 +419,9 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
         </div>
       )}
 
-      {/* Top Tools: Upload Custom Sprite Sheet + Free AI SVG Generator */}
+      {/* Top Tools: Upload Custom Sprite Sheet / Audio + Free AI SVG Generator */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Upload SVG / PNG Sprite Sheet Card */}
+        {/* Upload SVG / PNG / MP3 / WAV Card */}
         <form
           onSubmit={handleUploadSubmit}
           className="rounded-xl border border-slate-200 bg-white p-5 space-y-4"
@@ -396,7 +429,7 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
           <div className="flex items-center gap-2">
             <Upload className="h-4 w-4 text-slate-800" />
             <h2 className="text-base font-bold text-slate-900">
-              স্প্রাইট শিট / SVG / PNG আপলোড করুন
+              স্প্রাইট শিট / ব্যাকগ্রাউন্ড / MP3 গান আপলোড করুন
             </h2>
           </div>
 
@@ -408,7 +441,7 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
                 onChange={(e) => {
                   const cat = e.target.value as HybridAssetCategory;
                   setUploadCategory(cat);
-                  if (cat === 'background') {
+                  if (cat === 'background' || isAudioAssetCategory(cat)) {
                     setUploadCols(1);
                     setUploadRows(1);
                     setUploadFrameCount(1);
@@ -422,6 +455,9 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
               >
                 <option value="sprite_actor">প্রাণী / গাড়ি (স্প্রাইট অ্যাক্টর)</option>
                 <option value="background">দৃশ্য / ব্যাকগ্রাউন্ড (৭২০x১২৮০)</option>
+                <option value="audio_song">গান / ভোকাল (MP3/WAV)</option>
+                <option value="audio_bgm">ব্যাকগ্রাউন্ড মিউজিক (BGM)</option>
+                <option value="audio_sfx">সাউন্ড ইফেক্ট (হাম্বা/হালুম/দৌড়)</option>
               </select>
             </div>
 
@@ -431,7 +467,11 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
                 type="text"
                 value={uploadName}
                 onChange={(e) => setUploadName(e.target.value)}
-                placeholder="যেমন: লাফানো খরগোশ বা নৌকা"
+                placeholder={
+                  isUploadingAudio
+                    ? 'যেমন: গুরু উপায় বল না (গান)'
+                    : 'যেমন: লাফানো খরগোশ বা নৌকা'
+                }
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-900"
               />
             </div>
@@ -445,7 +485,11 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
               type="text"
               value={uploadKeywords}
               onChange={(e) => setUploadKeywords(e.target.value)}
-              placeholder="যেমন: গরু ঘাস খাচ্ছে, গরু রাগান্বিত, হাম্বা, তাড়া করছে"
+              placeholder={
+                isUploadingAudio
+                  ? 'যেমন: গান, গুরু উপায় বল না, বাউল, রাফু গান'
+                  : 'যেমন: গরু ঘাস খাচ্ছে, গরু রাগান্বিত, হাম্বা, তাড়া করছে'
+              }
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-900"
             />
           </div>
@@ -515,11 +559,17 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
 
           <div className="flex flex-wrap items-center gap-3">
             <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0">
-              <ImageIcon className="h-4 w-4" />
-              <span>{uploadFile ? uploadFile.name : 'SVG বা PNG ফাইল বেছে নিন'}</span>
+              {isUploadingAudio ? (
+                <Music className="h-4 w-4" />
+              ) : (
+                <ImageIcon className="h-4 w-4" />
+              )}
+              <span>
+                {uploadFile ? uploadFile.name : 'SVG / PNG / MP3 / WAV ফাইল বেছে নিন'}
+              </span>
               <input
                 type="file"
-                accept=".svg,.png,.webp,.jpg,.jpeg,image/svg+xml,image/png,image/webp,image/jpeg"
+                accept=".svg,.png,.webp,.jpg,.jpeg,.mp3,.wav,.ogg,.m4a,image/*,audio/*"
                 className="hidden"
                 onChange={(e) => handleSelectFile(e.target.files?.[0])}
               />
@@ -535,23 +585,28 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
             </button>
           </div>
 
-          {uploadPreviewUrl && (
-            <SpritePreviewCanvas
-              asset={{
-                id: 'preview_tmp',
-                name: uploadName || 'প্রিভিউ',
-                keywords: [],
-                category: uploadCategory,
-                format: uploadFrameCount > 1 ? 'png_spritesheet' : 'png',
-                source: 'uploaded',
-                url: uploadPreviewUrl,
-                cols: uploadCols,
-                rows: uploadRows,
-                frameCount: uploadFrameCount,
-                fps: uploadFps,
-              }}
-            />
-          )}
+          {uploadPreviewUrl &&
+            (isUploadingAudio ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <audio controls src={uploadPreviewUrl} className="w-full" />
+              </div>
+            ) : (
+              <SpritePreviewCanvas
+                asset={{
+                  id: 'preview_tmp',
+                  name: uploadName || 'প্রিভিউ',
+                  keywords: [],
+                  category: uploadCategory,
+                  format: uploadFrameCount > 1 ? 'png_spritesheet' : 'png',
+                  source: 'uploaded',
+                  url: uploadPreviewUrl,
+                  cols: uploadCols,
+                  rows: uploadRows,
+                  frameCount: uploadFrameCount,
+                  fps: uploadFps,
+                }}
+              />
+            ))}
         </form>
 
         {/* Free AI SVG & Sprite Generator + PC Folder Tip */}
@@ -628,18 +683,30 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
               <div className="space-y-1.5 text-xs text-slate-600">
                 <p className="font-bold text-slate-900">স্থায়ী ফোল্ডার ও Render ফ্রি প্ল্যান নোট</p>
                 <p>
-                  অ্যাপ থেকে আপলোড করা স্প্রাইট আপনার বর্তমান ব্রাউজারের IndexedDB-তেও সংরক্ষিত থাকে। তবে Render ফ্রি প্ল্যান রিস্টার্ট হলে সার্ভার ডিস্ক রিসেট হয়—তাই সব ডিভাইস থেকে স্থায়ীভাবে পেতে চাইলে ফাইলগুলো সরাসরি GitHub রিপোর{' '}
+                  অ্যাপ থেকে আপলোড করা স্প্রাইট ও MP3 আপনার ব্রাউজারের IndexedDB-তেও সংরক্ষিত থাকে। তবে সব ডিভাইস থেকে স্থায়ীভাবে পেতে চাইলে ফাইলগুলো GitHub রিপোর{' '}
                   <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular text-slate-800">
                     public/assets/actors/
-                  </code>{' '}
-                  বা{' '}
+                  </code>
+                  ,{' '}
                   <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular text-slate-800">
                     public/assets/backgrounds/
                   </code>{' '}
-                  ফোল্ডারে রাখুন।
+                  এবং অডিওর জন্য{' '}
+                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular text-slate-800">
+                    public/assets/audio/songs/
+                  </code>
+                  ,{' '}
+                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular text-slate-800">
+                    bgm/
+                  </code>{' '}
+                  ও{' '}
+                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular text-slate-800">
+                    sfx/
+                  </code>{' '}
+                  ফোল্ডারে রাখুন — ভবিষ্যতে কোনো কোড বদলাতে হবে না।
                 </p>
                 <p>
-                  একই প্রাণীর একাধিক ভঙ্গির স্প্রাইট (যেমন ঘাস খাওয়া, রাগ, তাড়া করা) আলাদা ফাইলে দিলে নামের শেষে গ্রিড সাইজ ও অবস্থার নাম দিন:{' '}
+                  একই প্রাণীর একাধিক ভঙ্গির স্প্রাইট আলাদা ফাইলে দিলে নামের শেষে গ্রিড সাইজ ও অবস্থার নাম দিন:{' '}
                   <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular">
                     cow_grazing_4x1.png
                   </code>
@@ -647,11 +714,7 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
                   <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular">
                     cow_angry_4x1.png
                   </code>
-                  ,{' '}
-                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono-tabular">
-                    cow_chase_4x1.png
-                  </code>
-                  —তাহলে দৃশ্য অনুযায়ী সঠিক স্প্রাইট শিট বেছে নেবে।
+                  —তাহলে দৃশ্য অনুযায়ী সঠিক স্প্রাইট শিট ও গান/সাউন্ড স্বয়ংক্রিয়ভাবে যুক্ত হবে।
                 </p>
               </div>
             </div>
@@ -662,9 +725,20 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
       {/* Asset Grid */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {filteredAssets.map((asset) => {
+          const isAudio = isAudioAssetCategory(asset.category);
           const isSheet = asset.category === 'sprite_actor' && (asset.frameCount || 1) > 1;
+          const catLabel =
+            asset.category === 'background'
+              ? 'ব্যাকগ্রাউন্ড'
+              : asset.category === 'audio_song'
+                ? 'গান / ভোকাল'
+                : asset.category === 'audio_bgm'
+                  ? 'ব্যাকগ্রাউন্ড মিউজিক'
+                  : asset.category === 'audio_sfx'
+                    ? 'সাউন্ড ইফেক্ট'
+                    : 'স্প্রাইট অ্যাক্টর';
           const metaLine = [
-            asset.category === 'background' ? 'ব্যাকগ্রাউন্ড' : 'স্প্রাইট অ্যাক্টর',
+            catLabel,
             isSheet ? `${asset.frameCount} ফ্রেম · ${asset.fps || 7} FPS` : asset.format.toUpperCase(),
             asset.source === 'builtin'
               ? 'বিল্ট-ইন'
@@ -681,7 +755,19 @@ export function AssetLibraryView({ onAssetsUpdated }: AssetLibraryViewProps) {
               className="flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-4"
             >
               <div>
-                <SpritePreviewCanvas asset={asset} animate />
+                {isAudio ? (
+                  <div className="flex h-40 flex-col items-center justify-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3">
+                    <Music className="h-8 w-8 text-slate-700" />
+                    <audio
+                      controls
+                      preload="metadata"
+                      src={resolveAssetUrlWithBackup(asset.url, asset.id)}
+                      className="w-full"
+                    />
+                  </div>
+                ) : (
+                  <SpritePreviewCanvas asset={asset} animate />
+                )}
                 <div className="mt-3 flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <h3 className="truncate text-sm font-bold text-slate-900">{asset.name}</h3>
