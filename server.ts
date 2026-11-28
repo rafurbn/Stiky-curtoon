@@ -24,6 +24,9 @@ const CUSTOM_ASSETS_INDEX = path.join(CUSTOM_ASSETS_DIR, 'index.json');
 const PUBLIC_ASSETS_ROOT = path.resolve(__dirname, 'public', 'assets');
 const PUBLIC_BACKGROUNDS_DIR = path.resolve(__dirname, 'public', 'assets', 'backgrounds');
 const PUBLIC_ACTORS_DIR = path.resolve(__dirname, 'public', 'assets', 'actors');
+const PUBLIC_AUDIO_SONGS_DIR = path.resolve(__dirname, 'public', 'assets', 'audio', 'songs');
+const PUBLIC_AUDIO_BGM_DIR = path.resolve(__dirname, 'public', 'assets', 'audio', 'bgm');
+const PUBLIC_AUDIO_SFX_DIR = path.resolve(__dirname, 'public', 'assets', 'audio', 'sfx');
 
 const app = express();
 app.use(express.json({ limit: '35mb' }));
@@ -36,7 +39,7 @@ const uploadVideo = multer({
 
 const uploadAsset = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 },
+  limits: { fileSize: 15 * 1024 * 1024 },
 });
 
 async function ensureDataDirs() {
@@ -202,7 +205,7 @@ async function generateJsonWithRetryAndFallback(params: {
         if (!shouldRetryOrFallback(err)) {
           throw err;
         }
-        await sleep(800 * (attempt + 1));
+        await sleep(1400 * (attempt + 1));
       }
     }
   }
@@ -252,8 +255,22 @@ interface HybridAssetMeta {
   id: string;
   name: string;
   keywords: string[];
-  category: 'background' | 'sprite_actor' | 'prop';
-  format: 'svg' | 'svg_spritesheet' | 'png_spritesheet' | 'png';
+  category:
+    | 'background'
+    | 'sprite_actor'
+    | 'prop'
+    | 'audio_song'
+    | 'audio_bgm'
+    | 'audio_sfx';
+  format:
+    | 'svg'
+    | 'svg_spritesheet'
+    | 'png_spritesheet'
+    | 'png'
+    | 'mp3'
+    | 'wav'
+    | 'ogg'
+    | 'm4a';
   source: 'builtin' | 'folder' | 'uploaded' | 'ai_generated';
   url: string;
   fileName?: string;
@@ -695,12 +712,61 @@ async function scanFolderAssets(
   return results;
 }
 
+async function scanAudioFolderAssets(
+  dirPath: string,
+  category: 'audio_song' | 'audio_bgm' | 'audio_sfx',
+  urlPrefix: string
+): Promise<HybridAssetMeta[]> {
+  const results: HybridAssetMeta[] = [];
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!['.mp3', '.wav', '.ogg', '.m4a'].includes(ext)) continue;
+      const stem = path.basename(entry.name, ext);
+      const id = `${category}_${stem.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}`;
+      const displayName = stem.replace(/[_-]+/g, ' ').trim();
+      const format = ext.slice(1) as 'mp3' | 'wav' | 'ogg' | 'm4a';
+      results.push({
+        id,
+        name: displayName || stem,
+        keywords: Array.from(
+          new Set(
+            [displayName, ...displayName.toLowerCase().split(/[\s,_\-।()]+/)].filter(
+              (w) => w && w.length >= 2
+            )
+          )
+        ),
+        category,
+        format,
+        source: 'folder',
+        url: `${urlPrefix}/${encodeURIComponent(entry.name)}`,
+      });
+    }
+  } catch {
+    // Folder might not exist yet
+  }
+  return results;
+}
+
 async function getAllHybridAssets(): Promise<HybridAssetMeta[]> {
   const builtinIds = new Set(BUILTIN_ASSET_DEFS.map((a) => a.id));
-  const [folderBgs, folderActors, folderRootActors, customAssets] = await Promise.all([
+  const [
+    folderBgs,
+    folderActors,
+    folderRootActors,
+    folderSongs,
+    folderBgm,
+    folderSfx,
+    customAssets,
+  ] = await Promise.all([
     scanFolderAssets(PUBLIC_BACKGROUNDS_DIR, 'background', '/assets/backgrounds', builtinIds),
     scanFolderAssets(PUBLIC_ACTORS_DIR, 'sprite_actor', '/assets/actors', builtinIds),
     scanFolderAssets(PUBLIC_ASSETS_ROOT, 'sprite_actor', '/assets', builtinIds),
+    scanAudioFolderAssets(PUBLIC_AUDIO_SONGS_DIR, 'audio_song', '/assets/audio/songs'),
+    scanAudioFolderAssets(PUBLIC_AUDIO_BGM_DIR, 'audio_bgm', '/assets/audio/bgm'),
+    scanAudioFolderAssets(PUBLIC_AUDIO_SFX_DIR, 'audio_sfx', '/assets/audio/sfx'),
     readCustomAssetsIndex(),
   ]);
   const byId = new Map<string, HybridAssetMeta>();
@@ -708,6 +774,9 @@ async function getAllHybridAssets(): Promise<HybridAssetMeta[]> {
   for (const a of folderBgs) byId.set(a.id, a);
   for (const a of folderActors) byId.set(a.id, a);
   for (const a of folderRootActors) if (!byId.has(a.id)) byId.set(a.id, a);
+  for (const a of folderSongs) byId.set(a.id, a);
+  for (const a of folderBgm) byId.set(a.id, a);
+  for (const a of folderSfx) byId.set(a.id, a);
   for (const a of customAssets) byId.set(a.id, a);
   return Array.from(byId.values());
 }
@@ -792,6 +861,13 @@ Rules:
   return { asset: meta, svg: cleanSvg };
 }
 
+app.get('/api/health', (_req, res) => {
+  return res.json({
+    ok: true,
+    aiConfigured: Boolean(process.env.GEMINI_API_KEY),
+  });
+});
+
 app.get('/api/assets', async (_req, res) => {
   try {
     const assets = await getAllHybridAssets();
@@ -816,7 +892,15 @@ app.get('/api/assets/file/:filename', async (req, res) => {
           ? 'image/png'
           : ext === '.webp'
             ? 'image/webp'
-            : 'image/jpeg';
+            : ext === '.mp3'
+              ? 'audio/mpeg'
+              : ext === '.wav'
+                ? 'audio/wav'
+                : ext === '.ogg'
+                  ? 'audio/ogg'
+                  : ext === '.m4a'
+                    ? 'audio/mp4'
+                    : 'image/jpeg';
     res.setHeader('Content-Type', mime);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     return res.sendFile(filePath);
@@ -829,7 +913,9 @@ app.post('/api/assets/upload', uploadAsset.single('file'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) {
-      return res.status(400).json({ error: 'আপলোড করার জন্য একটি SVG বা PNG ফাইল নির্বাচন করুন।' });
+      return res.status(400).json({
+        error: 'আপলোড করার জন্য একটি SVG, PNG, MP3 অথবা WAV ফাইল নির্বাচন করুন।',
+      });
     }
     const origExt = path.extname(file.originalname || '').toLowerCase();
     const mime = (file.mimetype || '').toLowerCase();
@@ -837,17 +923,19 @@ app.post('/api/assets/upload', uploadAsset.single('file'), async (req, res) => {
     const isRaster =
       ['.png', '.webp', '.jpg', '.jpeg'].includes(origExt) ||
       ['image/png', 'image/webp', 'image/jpeg'].includes(mime);
+    const isAudio =
+      ['.mp3', '.wav', '.ogg', '.m4a'].includes(origExt) || mime.startsWith('audio/');
 
-    if (!isSvg && !isRaster) {
+    if (!isSvg && !isRaster && !isAudio) {
       return res.status(400).json({
-        error: 'শুধুমাত্র .svg, .png, .webp অথবা .jpg ফাইল আপলোড করা যাবে।',
+        error: 'শুধুমাত্র .svg, .png, .webp, .jpg, .mp3, .wav, .ogg অথবা .m4a ফাইল আপলোড করা যাবে।',
       });
     }
 
     await ensureDataDirs();
     const {
       name = '',
-      category = 'sprite_actor',
+      category = isAudio ? 'audio_song' : 'sprite_actor',
       keywords = '',
       cols = '4',
       rows = '1',
@@ -855,22 +943,45 @@ app.post('/api/assets/upload', uploadAsset.single('file'), async (req, res) => {
       fps = '7',
     } = req.body ?? {};
 
-    const cleanCategory: HybridAssetMeta['category'] =
-      category === 'background' ? 'background' : category === 'prop' ? 'prop' : 'sprite_actor';
+    const cleanCategory: HybridAssetMeta['category'] = isAudio
+      ? category === 'audio_bgm' || category === 'audio_sfx' || category === 'audio_song'
+        ? category
+        : 'audio_song'
+      : category === 'background'
+        ? 'background'
+        : category === 'prop'
+          ? 'prop'
+          : 'sprite_actor';
 
     const parsedCols = Math.max(1, Math.min(16, Number(cols) || 1));
     const parsedRows = Math.max(1, Math.min(8, Number(rows) || 1));
     const parsedFrames = Math.max(1, Math.min(64, Number(frameCount) || parsedCols * parsedRows));
     const parsedFps = Math.max(1, Math.min(24, Number(fps) || 7));
 
-    const baseName = String(name || path.basename(file.originalname, origExt) || 'custom_asset').trim();
+    const baseName = String(
+      name || path.basename(file.originalname, origExt) || 'custom_asset'
+    ).trim();
     const slug = baseName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '')
       .slice(0, 32);
     const id = `${slug || 'asset'}_${Date.now().toString(36).slice(-5)}`;
-    const safeExt = isSvg ? '.svg' : origExt === '.webp' ? '.webp' : origExt === '.jpg' || origExt === '.jpeg' ? '.jpg' : '.png';
+    const safeExt = isSvg
+      ? '.svg'
+      : isAudio
+        ? origExt === '.wav' || mime.includes('wav')
+          ? '.wav'
+          : origExt === '.ogg' || mime.includes('ogg')
+            ? '.ogg'
+            : origExt === '.m4a' || mime.includes('mp4')
+              ? '.m4a'
+              : '.mp3'
+        : origExt === '.webp'
+          ? '.webp'
+          : origExt === '.jpg' || origExt === '.jpeg'
+            ? '.jpg'
+            : '.png';
     const fileName = `${id}${safeExt}`;
     const filePath = resolveConfinedAssetPath(fileName);
     if (!filePath) {
@@ -892,13 +1003,15 @@ app.post('/api/assets/upload', uploadAsset.single('file'), async (req, res) => {
           .filter(Boolean);
 
     const isSheet = cleanCategory === 'sprite_actor' && parsedFrames > 1;
-    const format: HybridAssetMeta['format'] = isSheet
-      ? isSvg
-        ? 'svg_spritesheet'
-        : 'png_spritesheet'
-      : isSvg
-        ? 'svg'
-        : 'png';
+    const format: HybridAssetMeta['format'] = isAudio
+      ? (safeExt.slice(1) as 'mp3' | 'wav' | 'ogg' | 'm4a')
+      : isSheet
+        ? isSvg
+          ? 'svg_spritesheet'
+          : 'png_spritesheet'
+        : isSvg
+          ? 'svg'
+          : 'png';
 
     const autoKeywords = Array.from(
       new Set([
@@ -1202,9 +1315,10 @@ app.post('/api/generate-video', async (req, res) => {
       renderStyle === 'stick_meme' || renderStyle === 'cartoon_2d' ? renderStyle : 'auto';
     const rawUserScript = typeof customScript === 'string' ? customScript.trim() : '';
     const rawHint = typeof customHint === 'string' ? customHint.trim() : '';
+    const isLocalScriptMode = mode === 'local_script';
     const isCustomScriptMode = mode === 'custom_script' && rawUserScript.length > 0;
 
-    if (mode === 'custom_script' && !rawUserScript) {
+    if ((mode === 'custom_script' || mode === 'local_script') && !rawUserScript) {
       return res.status(400).json({ error: 'অনুগ্রহ করে আপনার স্ক্রিপ্ট বা গল্পটি লিখুন।' });
     }
 
@@ -1215,22 +1329,33 @@ app.post('/api/generate-video', async (req, res) => {
       for (const ca of clientCustomAssets as Array<Record<string, unknown>>) {
         const cid = typeof ca?.id === 'string' ? ca.id.trim() : '';
         if (!cid || mergedById.has(cid.toLowerCase())) continue;
+        const rawCat = String(ca.category || 'sprite_actor');
+        const cat: HybridAssetMeta['category'] =
+          rawCat === 'background'
+            ? 'background'
+            : rawCat === 'prop'
+              ? 'prop'
+              : rawCat === 'audio_song' || rawCat === 'audio_bgm' || rawCat === 'audio_sfx'
+                ? (rawCat as HybridAssetMeta['category'])
+                : 'sprite_actor';
+        const rawFmt = String(ca.format || 'png_spritesheet');
+        const fmt: HybridAssetMeta['format'] = (
+          ['svg', 'png', 'png_spritesheet', 'svg_spritesheet', 'mp3', 'wav', 'ogg', 'm4a'].includes(
+            rawFmt
+          )
+            ? rawFmt
+            : 'png_spritesheet'
+        ) as HybridAssetMeta['format'];
         mergedById.set(cid.toLowerCase(), {
           id: cid,
           name: String(ca.name || cid),
-          keywords: Array.isArray(ca.keywords) ? ca.keywords.map((k) => String(k)) : [String(ca.name || cid)],
-          category:
-            ca.category === 'background'
-              ? 'background'
-              : ca.category === 'prop'
-                ? 'prop'
-                : 'sprite_actor',
-          format:
-            ca.format === 'svg' || ca.format === 'png' || ca.format === 'png_spritesheet' || ca.format === 'svg_spritesheet'
-              ? ca.format
-              : 'png_spritesheet',
+          keywords: Array.isArray(ca.keywords)
+            ? ca.keywords.map((k) => String(k))
+            : [String(ca.name || cid)],
+          category: cat,
+          format: fmt,
           source: 'uploaded',
-          url: '',
+          url: typeof ca.url === 'string' ? ca.url : '',
           cols: Number(ca.cols) || undefined,
           rows: Number(ca.rows) || undefined,
           frameCount: Number(ca.frameCount) || undefined,
@@ -1239,6 +1364,809 @@ app.post('/api/generate-video', async (req, res) => {
       }
     }
     const hybridCatalog = Array.from(mergedById.values());
+
+    // Helper: Match uploaded/folder audio assets (songs, BGM, SFX) cleanly by keywords/title/action
+    const matchBestAudioAsset = (
+      category: 'audio_song' | 'audio_bgm' | 'audio_sfx',
+      query: string
+    ): HybridAssetMeta | undefined => {
+      const pool = hybridCatalog.filter((a) => a.category === category);
+      if (pool.length === 0) return undefined;
+      const q = query
+        .toLowerCase()
+        .replace(/গুরু/g, 'গরু')
+        .replace(/রফু/g, 'রাফু')
+        .replace(/গুতু/g, 'গুঁতো')
+        .replace(/দোড়ানি/g, 'দৌড়ানি');
+      let best: HybridAssetMeta | undefined;
+      let bestScore = 0;
+      for (const a of pool) {
+        let score = 0;
+        const idLow = a.id.toLowerCase();
+        const nameLow = a.name.toLowerCase().replace(/গুরু/g, 'গরু').replace(/রফু/g, 'রাফু');
+        if (idLow.length >= 2 && q.includes(idLow)) score += 6;
+        for (const kw of a.keywords) {
+          const k = kw.toLowerCase().replace(/গুরু/g, 'গরু').replace(/রফু/g, 'রাফু').trim();
+          if (k.length >= 2 && q.includes(k)) score += 5;
+        }
+        for (const word of nameLow.split(/[\s,_\-।()]+/)) {
+          if (word.length >= 2 && q.includes(word)) score += 3;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          best = a;
+        }
+      }
+      if (bestScore > 0) return best;
+      return undefined;
+    };
+
+    const attachAudioAssetsToScenesAndMeta = (
+      sceneList: Array<Record<string, unknown>>,
+      fullTextContext: string,
+      currentMusicStyle: string
+    ) => {
+      const songPool = hybridCatalog.filter((a) => a.category === 'audio_song');
+      const bgmPool = hybridCatalog.filter((a) => a.category === 'audio_bgm');
+      let chosenMusicStyle = currentMusicStyle;
+
+      if (
+        (!chosenMusicStyle || chosenMusicStyle === 'cinematic_parody') &&
+        /(গান|গাই|সুর|বাঁশি|দোতারা|মাঠ|গ্রাম|মেঠো|ফোক|folk)/.test(fullTextContext.toLowerCase())
+      ) {
+        chosenMusicStyle = 'folk';
+      }
+
+      const matchedBgm =
+        matchBestAudioAsset('audio_bgm', fullTextContext) ||
+        (/(গান|সুর|ফোক|গ্রাম|মাঠ|folk)/.test(fullTextContext.toLowerCase()) && bgmPool.length === 1
+          ? bgmPool[0]
+          : undefined);
+
+      for (const sc of sceneList) {
+        const scCaption = String(sc.captionTop || '');
+        const chars = Array.isArray(sc.characters)
+          ? (sc.characters as Array<Record<string, unknown>>)
+          : [];
+        for (const ch of chars) {
+          if (ch.customAudioUrl || ch.customAudioDataUrl) continue;
+          const actionLow = String(ch.action || '').toLowerCase();
+          const speechLow = String(ch.speech || '').toLowerCase();
+          const nameLow = String(ch.name || '').toLowerCase();
+          const charQuery = `${nameLow} ${actionLow} ${speechLow} ${scCaption}`;
+
+          if (/(sing|গান|সুর)/.test(`${actionLow} ${scCaption}`)) {
+            const matchedSong =
+              matchBestAudioAsset('audio_song', `${speechLow} ${scCaption} ${fullTextContext}`) ||
+              (songPool.length === 1 ? songPool[0] : undefined);
+            if (matchedSong) {
+              if (matchedSong.url) ch.customAudioUrl = matchedSong.url;
+              ch.customAudioAssetId = matchedSong.id;
+              continue;
+            }
+          }
+
+          const matchedSfx = matchBestAudioAsset('audio_sfx', charQuery);
+          if (matchedSfx) {
+            if (matchedSfx.url) ch.customAudioUrl = matchedSfx.url;
+            ch.customAudioAssetId = matchedSfx.id;
+          }
+        }
+      }
+
+      return {
+        musicStyle: chosenMusicStyle,
+        customBgmUrl: matchedBgm?.url || undefined,
+        customBgmAssetId: matchedBgm?.id || undefined,
+        customBgmName: matchedBgm?.name || undefined,
+      };
+    };
+
+    // =========================================================================
+    // ZERO-COST, 503-FREE LOCAL RULE-BASED SCRIPT CHOREOGRAPHER (mode = 'local_script')
+    // =========================================================================
+    if (isLocalScriptMode) {
+      const spriteCatalog = hybridCatalog.filter((a) => a.category === 'sprite_actor');
+      const bgCatalog = hybridCatalog.filter((a) => a.category === 'background');
+
+      const normalizeBn = (s: string) =>
+        s
+          .replace(/রফু/g, 'রাফু')
+          .replace(/হাঠতে/g, 'হাঁটতে')
+          .replace(/গুতু/g, 'গুঁতো')
+          .replace(/দোড়ানি/g, 'দৌড়ানি')
+          .replace(/(মাঠ|ঘাস|হাম্বা|গুঁতো|গরু|তাড়া)([^।!?\n]{0,45})গুরু/g, '$1$2গরু')
+          .replace(/গুরু([^।!?\n]{0,45})(মাঠ|ঘাস|হাম্বা|গুঁতো|তাড়া|দৌড়ানি|পাশে)/g, 'গরু$1$2')
+          .replace(/একটি\s+গুরু/g, 'একটি গরু')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+      const cleanedDisplayScript = rawUserScript
+        .replace(/গুতু/g, 'গুঁতো')
+        .replace(/দোড়ানি/g, 'দৌড়ানি')
+        .replace(/হাঠতে/g, 'হাঁটতে')
+        .trim();
+      const normFull = normalizeBn(cleanedDisplayScript);
+      const normLow = normFull.toLowerCase();
+
+      const pickBgId = (clause: string, fallbackBg = 'clear_day_sky'): string => {
+        const q = `${clause} ${normLow}`.toLowerCase();
+        let bestId = '';
+        let bestScore = 0;
+        for (const bg of bgCatalog) {
+          let score = 0;
+          if (q.includes(bg.id.toLowerCase())) score += 6;
+          for (const kw of bg.keywords) {
+            const k = kw.toLowerCase().trim();
+            if (k.length >= 2 && clause.toLowerCase().includes(k)) score += 6;
+            else if (k.length >= 2 && q.includes(k)) score += 3;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestId = bg.id;
+          }
+        }
+        if (bestId) return bestId;
+        if (/(মাঠ|ঘাস|চারণ)/.test(q)) return 'field_meadow';
+        if (/(রাস্তা|পথ|গ্রাম)/.test(q)) return 'village_road';
+        if (/(নদী|পুকুর|নৌকা)/.test(q)) return 'river_ghat';
+        if (/(বাজার|হাট|দোকান)/.test(q)) return 'bazar_street';
+        if (/(চা|টং)/.test(q)) return 'tea_stall_day';
+        return fallbackBg;
+      };
+
+      const findCatalogSprite = (id: string) =>
+        spriteCatalog.find((s) => s.id.toLowerCase() === id.toLowerCase());
+
+      // Detect participating actors in script
+      const hasRafu = /(রাফু|রফু|rafu|rofu|ছেলে)/.test(normLow);
+      const hasCow = /(গরু|গাভী|ষাঁড়|হাম্বা|cow)/.test(normLow);
+      const hasTiger = /(বাঘ|হালুম|tiger)/.test(normLow);
+      const hasDog = /(কুকুর|ঘেউ|dog)/.test(normLow);
+      const hasGoat = /(ছাগল|খাসি|goat)/.test(normLow);
+      const hasCat = /(বিড়াল|মিউ|cat)/.test(normLow);
+      const hasCrow = /(কাক|পাখি|crow)/.test(normLow);
+      const hasFolk = /(ফোক|folk)/.test(normLow);
+      const hasChacha = /(চাচা|chacha)/.test(normLow);
+
+      // Also detect any user-uploaded / folder custom sprites mentioned in the script
+      const customMatchedSprites = spriteCatalog.filter((sp) => {
+        if (sp.source === 'builtin') return false;
+        const keys = [sp.id, sp.name, ...sp.keywords].map((k) => k.toLowerCase().trim());
+        return keys.some((k) => k.length >= 2 && normLow.includes(k));
+      });
+
+      const primaryHumanName = hasRafu ? 'রাফু' : hasFolk ? 'ফোক' : hasChacha ? 'চাচা' : 'রাফু';
+      const isRafuSprite = hasRafu || (!hasFolk && !hasChacha && customMatchedSprites.length === 0);
+
+      const makeRafuChar = (opts: {
+        spriteId: 'rafu_walk_talk' | 'rafu_scared' | 'rafu_running_away';
+        action: string;
+        expression: string;
+        speech?: string;
+        voiceEffect?: string;
+        side?: 'left' | 'right' | 'center';
+        keyframes: Array<Record<string, unknown>>;
+      }): Record<string, unknown> => {
+        if (isRafuSprite && findCatalogSprite(opts.spriteId)) {
+          return {
+            id: 'rafu',
+            name: primaryHumanName,
+            kind: 'sprite_actor',
+            spriteAssetId: opts.spriteId,
+            side: opts.side || 'left',
+            expression: opts.expression,
+            action: opts.action,
+            prop: 'none',
+            voiceEffect: opts.voiceEffect || 'normal',
+            speech: opts.speech || '',
+            keyframes: opts.keyframes,
+          };
+        }
+        return {
+          id: hasFolk ? 'folk' : hasChacha ? 'chacha' : 'rafu',
+          name: primaryHumanName,
+          kind: 'human_rig',
+          outfitStyle: hasChacha ? 'lungi_panjabi' : 'casual',
+          side: opts.side || 'left',
+          expression: opts.expression,
+          action: opts.action,
+          prop: 'none',
+          voiceEffect: opts.voiceEffect || 'normal',
+          speech: opts.speech || '',
+          keyframes: opts.keyframes,
+        };
+      };
+
+      const makeAnimalChar = (opts: {
+        kindKey: 'cow' | 'tiger' | 'dog' | 'goat' | 'cat' | 'crow' | 'custom';
+        customSprite?: HybridAssetMeta;
+        spriteId?: string;
+        action: string;
+        expression: string;
+        speech?: string;
+        voiceEffect?: string;
+        side?: 'left' | 'right' | 'center';
+        keyframes: Array<Record<string, unknown>>;
+      }): Record<string, unknown> => {
+        const metaMap: Record<string, { id: string; name: string; defSprite: string }> = {
+          cow: { id: 'cow', name: 'গরু', defSprite: 'cow_grass_eating' },
+          tiger: { id: 'tiger', name: 'বাঘ', defSprite: 'tiger_walk_roar' },
+          dog: { id: 'dog', name: 'কুকুর', defSprite: 'dog' },
+          goat: { id: 'goat', name: 'ছাগল', defSprite: 'goat' },
+          cat: { id: 'cat', name: 'বিড়াল', defSprite: 'cat' },
+          crow: { id: 'crow', name: 'কাক', defSprite: 'crow' },
+          custom: {
+            id: opts.customSprite?.id || 'actor',
+            name: opts.customSprite?.name || 'অ্যাক্টর',
+            defSprite: opts.customSprite?.id || '',
+          },
+        };
+        const m = metaMap[opts.kindKey];
+        return {
+          id: m.id,
+          name: m.name,
+          kind: 'sprite_actor',
+          spriteAssetId: opts.spriteId || m.defSprite,
+          side: opts.side || 'right',
+          expression: opts.expression,
+          action: opts.action,
+          prop: 'none',
+          voiceEffect: opts.voiceEffect || 'dramatic_boss',
+          speech: opts.speech || '',
+          keyframes: opts.keyframes,
+        };
+      };
+
+      // Extract singing lyric or quoted speech cleanly
+      const rawLines = cleanedDisplayScript
+        .split(/[\n।!?]+/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+      let songLine = '';
+      const colonMatch = cleanedDisplayScript.match(
+        /(?:গান[^:\n]*|গাইতে[^:\n]*|বল[ছেলেব]*[^:\n]*):\s*([^\n।!?]+)/
+      );
+      if (colonMatch?.[1]) {
+        songLine = colonMatch[1].trim();
+      } else {
+        const quoteMatch = cleanedDisplayScript.match(/[“"']([^”"']{3,70})[”"']/);
+        if (quoteMatch?.[1]) songLine = quoteMatch[1].trim();
+      }
+
+      const hasSinging = /(গান|গাই|সুর|গুনগুন)/.test(normLow) || Boolean(songLine);
+      const hasWalkNear = /(পাশে|সামনে|আস[েল]|হাঁটতে|হেটে|হেঁটে)/.test(normLow);
+      const hasMooOrRoar = /(হাম্বা|ডাক[বেছ]|গর্জন|হালুম|রাগান্বিত|রাগ|রেগে|ভয়)/.test(normLow);
+      const hasChase = /(তাড়া|দৌড়ানি|দোড়ানি|গুঁতো|গুতু|তেড়ে|আক্রমণ|ধাক্কা|পালা|ভাগ)/.test(
+        normLow
+      );
+
+      const primaryAnimal: 'cow' | 'tiger' | 'dog' | 'goat' | 'cat' | 'crow' | 'custom' | null =
+        hasCow
+          ? 'cow'
+          : hasTiger
+            ? 'tiger'
+            : hasDog
+              ? 'dog'
+              : hasGoat
+                ? 'goat'
+                : hasCat
+                  ? 'cat'
+                  : hasCrow
+                    ? 'crow'
+                    : customMatchedSprites[0]
+                      ? 'custom'
+                      : null;
+
+      const mainBgId = pickBgId(normLow, 'field_meadow');
+      const chaseBg2 = findCatalogSprite('village_road') || bgCatalog.find((b) => b.id === 'village_road')
+        ? 'village_road'
+        : mainBgId;
+
+      const localScenes: Array<Record<string, unknown>> = [];
+
+      // Case A: Rich Action / Story Template with Singing + Encounter + Reaction + Multi-Pass Chase
+      if (primaryAnimal && (hasChase || hasMooOrRoar || hasSinging)) {
+        // Scene 0: Walk & Sing Intro (parallax + musical notes)
+        const introSpeech =
+          songLine || (hasSinging ? 'মনের আনন্দে চলি রে, সবুজ মাঠের পথে!' : 'আজকের দিনটা বেশ সুন্দর!');
+        const introChars: Array<Record<string, unknown>> = [
+          makeRafuChar({
+            spriteId: 'rafu_walk_talk',
+            action: hasSinging ? 'singing' : 'walk_in',
+            expression: 'happy',
+            speech: introSpeech,
+            voiceEffect: 'normal',
+            side: 'left',
+            keyframes: [
+              { t: 0, x: 0.16, y: 0, facing: 1, scale: 1, expression: 'happy' },
+              { t: 1, x: 0.44, y: 0, facing: 1, scale: 1, expression: 'happy' },
+            ],
+          }),
+        ];
+
+        if (primaryAnimal === 'cow' && !hasWalkNear) {
+          introChars.push(
+            makeAnimalChar({
+              kindKey: 'cow',
+              spriteId: 'cow_grass_eating',
+              action: 'grazing',
+              expression: 'deadpan',
+              speech: '',
+              side: 'right',
+              keyframes: [
+                { t: 0, x: 0.74, y: 0, facing: -1, scale: 1, expression: 'deadpan' },
+                { t: 1, x: 0.72, y: 0, facing: -1, scale: 1, expression: 'deadpan' },
+              ],
+            })
+          );
+        }
+
+        localScenes.push({
+          sceneIndex: localScenes.length,
+          durationSec: 4.2,
+          theme: mainBgId,
+          backgroundAssetId: mainBgId,
+          parallax: 0.55,
+          camera: 'wide',
+          sfx: 'pop',
+          captionTop: hasSinging ? `${primaryHumanName} গান গাইতে গাইতে হাঁটছে` : `${primaryHumanName} মাঠ দিয়ে হাঁটছে`,
+          effects: hasSinging
+            ? [
+                {
+                  t: 0.12,
+                  duration: 0.85,
+                  type: 'tickle_sparks',
+                  x: 0.3,
+                  y: 0.42,
+                  text: '♪ ♫',
+                  targetCharIndex: 0,
+                },
+              ]
+            : [],
+          sfxCues: [{ t: 0.08, sfx: 'pop' }],
+          characters: introChars,
+        });
+
+        // Scene 1: Approaches Animal
+        if (hasWalkNear || hasSinging) {
+          const calmSprite =
+            primaryAnimal === 'cow'
+              ? 'cow_grass_eating'
+              : primaryAnimal === 'tiger'
+                ? 'tiger_walk_roar'
+                : undefined;
+          localScenes.push({
+            sceneIndex: localScenes.length,
+            durationSec: 3.2,
+            theme: mainBgId,
+            backgroundAssetId: mainBgId,
+            parallax: 0.25,
+            camera: 'wide',
+            sfx: 'none',
+            captionTop:
+              primaryAnimal === 'cow'
+                ? 'হাঁটতে হাঁটতে একটি গরুর পাশে এলো'
+                : primaryAnimal === 'tiger'
+                  ? 'হঠাৎ সামনে বাঘ মামা হাজির!'
+                  : `সামনে ${customMatchedSprites[0]?.name || 'প্রাণীটি'} দাঁড়িয়ে আছে`,
+            effects: hasSinging
+              ? [
+                  {
+                    t: 0.15,
+                    duration: 0.6,
+                    type: 'tickle_sparks',
+                    x: 0.35,
+                    y: 0.45,
+                    text: '♪',
+                    targetCharIndex: 0,
+                  },
+                ]
+              : [],
+            sfxCues: [],
+            characters: [
+              makeRafuChar({
+                spriteId: 'rafu_walk_talk',
+                action: hasSinging ? 'singing' : 'walk_in',
+                expression: 'happy',
+                speech: hasSinging && songLine ? songLine : '',
+                voiceEffect: 'normal',
+                side: 'left',
+                keyframes: [
+                  { t: 0, x: 0.2, y: 0, facing: 1, scale: 1, expression: 'happy' },
+                  { t: 1, x: 0.38, y: 0, facing: 1, scale: 1, expression: 'happy' },
+                ],
+              }),
+              makeAnimalChar({
+                kindKey: primaryAnimal,
+                customSprite: customMatchedSprites[0],
+                spriteId: calmSprite,
+                action: primaryAnimal === 'cow' ? 'grazing' : 'idle',
+                expression: 'deadpan',
+                speech: '',
+                side: 'right',
+                keyframes: [
+                  { t: 0, x: 0.72, y: 0, facing: -1, scale: 1, expression: 'deadpan' },
+                  { t: 1, x: 0.68, y: 0, facing: -1, scale: 1, expression: 'angry' },
+                ],
+              }),
+            ],
+          });
+        }
+
+        // Scene 2: Angry Moo / Roar Reaction Closeup
+        if (hasMooOrRoar || hasChase) {
+          const roarSpeech =
+            primaryAnimal === 'cow'
+              ? 'হাম্বাআআ!'
+              : primaryAnimal === 'tiger'
+                ? 'হালুম!'
+                : primaryAnimal === 'dog'
+                  ? 'ঘেউ ঘেউ!'
+                  : primaryAnimal === 'goat'
+                    ? 'ম্যাঁঅ্যাঁ!'
+                    : 'এই দাঁড়া!';
+          const roarSprite =
+            primaryAnimal === 'cow'
+              ? 'cow_mooing'
+              : primaryAnimal === 'tiger'
+                ? 'tiger_walk_roar'
+                : undefined;
+          localScenes.push({
+            sceneIndex: localScenes.length,
+            durationSec: 3.3,
+            theme: mainBgId,
+            backgroundAssetId: mainBgId,
+            parallax: 0,
+            camera: 'zoom_right',
+            sfx: 'dramatic_boom',
+            captionTop:
+              primaryAnimal === 'cow'
+                ? 'গান শুনে গরু রেগে হাম্বা ডেকে উঠল!'
+                : 'রাগে গর্জন করে উঠল!',
+            effects: [
+              {
+                t: 0.3,
+                duration: 0.6,
+                type: 'sweat_burst',
+                x: 0.34,
+                y: 0.48,
+                targetCharIndex: 0,
+              },
+              {
+                t: 0.2,
+                duration: 0.4,
+                type: 'screen_shake',
+                x: 0.5,
+                y: 0.5,
+              },
+            ],
+            sfxCues: [{ t: 0.1, sfx: 'dramatic_boom' }],
+            characters: [
+              makeRafuChar({
+                spriteId: 'rafu_scared',
+                action: 'scared',
+                expression: 'shocked',
+                speech: '',
+                side: 'left',
+                keyframes: [
+                  { t: 0, x: 0.36, y: 0, facing: 1, scale: 1, expression: 'shocked' },
+                  { t: 0.38, x: 0.34, y: 0.14, facing: 1, scale: 1, expression: 'shocked' },
+                  { t: 0.75, x: 0.33, y: 0, facing: 1, scale: 1, expression: 'shocked' },
+                  { t: 1, x: 0.33, y: 0, facing: -1, scale: 1, expression: 'shocked' },
+                ],
+              }),
+              makeAnimalChar({
+                kindKey: primaryAnimal,
+                customSprite: customMatchedSprites[0],
+                spriteId: roarSprite,
+                action: primaryAnimal === 'cow' ? 'mooing' : 'roar',
+                expression: 'angry',
+                speech: roarSpeech,
+                voiceEffect: 'dramatic_boss',
+                side: 'right',
+                keyframes: [
+                  { t: 0, x: 0.68, y: 0, facing: -1, scale: 1.02, expression: 'angry' },
+                  { t: 1, x: 0.66, y: 0, facing: -1, scale: 1.06, expression: 'angry' },
+                ],
+              }),
+            ],
+          });
+        }
+
+        // Scene 3 & 4: Classic Multi-Pass Cartoon Chase (Exit Left -> Loop Back Left-to-Right!)
+        if (hasChase) {
+          const chaseSprite =
+            primaryAnimal === 'cow'
+              ? 'cow_attacking'
+              : primaryAnimal === 'tiger'
+                ? 'tiger_run_attack'
+                : undefined;
+
+          // Chase Pass 1: Right -> Left offscreen exit
+          localScenes.push({
+            sceneIndex: localScenes.length,
+            durationSec: 3.4,
+            theme: mainBgId,
+            backgroundAssetId: mainBgId,
+            parallax: -0.9,
+            camera: 'shake',
+            sfx: 'scream_sting',
+            captionTop:
+              primaryAnimal === 'cow'
+                ? 'গরু গুঁতো দিতে দৌড়ানি দিল!'
+                : 'ভয়ানক তাড়া! প্রাণপণে দৌড়!',
+            effects: [
+              { t: 0.15, duration: 0.45, type: 'impact_star', x: 0.45, y: 0.52, targetCharIndex: 0 },
+              { t: 0.1, duration: 0.85, type: 'speed_lines', x: 0.5, y: 0.5 },
+              { t: 0.25, duration: 0.65, type: 'dust_puff', x: 0.35, y: 0.72, targetCharIndex: 0 },
+            ],
+            sfxCues: [{ t: 0.1, sfx: 'scream_sting' }],
+            characters: [
+              makeRafuChar({
+                spriteId: 'rafu_running_away',
+                action: 'flee',
+                expression: 'shocked',
+                speech: 'ওরে বাবা রে, বাঁচাও!',
+                voiceEffect: 'panicked',
+                side: 'left',
+                keyframes: [
+                  { t: 0, x: 0.36, y: 0, facing: -1, scale: 1, expression: 'shocked' },
+                  { t: 0.4, x: 0.14, y: 0.08, facing: -1, scale: 1, expression: 'shocked' },
+                  { t: 1, x: -0.22, y: 0, facing: -1, scale: 1, expression: 'shocked' },
+                ],
+              }),
+              makeAnimalChar({
+                kindKey: primaryAnimal,
+                customSprite: customMatchedSprites[0],
+                spriteId: chaseSprite,
+                action: 'charge_butt',
+                expression: 'angry',
+                speech: '',
+                side: 'right',
+                keyframes: [
+                  { t: 0, x: 0.68, y: 0, facing: -1, scale: 1.02, expression: 'angry' },
+                  { t: 0.5, x: 0.36, y: 0.04, facing: -1, scale: 1.04, expression: 'angry' },
+                  { t: 1, x: -0.05, y: 0, facing: -1, scale: 1.04, expression: 'angry' },
+                ],
+              }),
+            ],
+          });
+
+          // Chase Pass 2: Enter from Left -> Sprint Right Offscreen!
+          localScenes.push({
+            sceneIndex: localScenes.length,
+            durationSec: 3.6,
+            theme: chaseBg2,
+            backgroundAssetId: chaseBg2,
+            parallax: 0.95,
+            camera: 'wide',
+            sfx: 'punchline',
+            captionTop: 'বাম দিক থেকে এসে ডান দিকে ভেগে পালাল!',
+            effects: [
+              { t: 0.05, duration: 0.9, type: 'speed_lines', x: 0.5, y: 0.5 },
+              { t: 0.25, duration: 0.65, type: 'dust_puff', x: 0.3, y: 0.72, targetCharIndex: 0 },
+              { t: 0.45, duration: 0.65, type: 'dust_puff', x: 0.45, y: 0.72, targetCharIndex: 1 },
+            ],
+            sfxCues: [
+              { t: 0.1, sfx: 'dramatic_boom' },
+              { t: 0.78, sfx: 'punchline' },
+            ],
+            characters: [
+              makeRafuChar({
+                spriteId: 'rafu_running_away',
+                action: 'flee',
+                expression: 'crying',
+                speech: 'আর গান গাবো না ভাই!',
+                voiceEffect: 'panicked',
+                side: 'right',
+                keyframes: [
+                  { t: 0, x: -0.18, y: 0, facing: 1, scale: 1, expression: 'crying' },
+                  { t: 0.5, x: 0.56, y: 0.06, facing: 1, scale: 1, expression: 'crying' },
+                  { t: 1, x: 1.2, y: 0, facing: 1, scale: 1, expression: 'crying' },
+                ],
+              }),
+              makeAnimalChar({
+                kindKey: primaryAnimal,
+                customSprite: customMatchedSprites[0],
+                spriteId: chaseSprite,
+                action: 'chasing',
+                expression: 'angry',
+                speech: '',
+                side: 'left',
+                keyframes: [
+                  { t: 0, x: -0.44, y: 0, facing: 1, scale: 1.02, expression: 'angry' },
+                  { t: 0.5, x: 0.28, y: 0.03, facing: 1, scale: 1.04, expression: 'angry' },
+                  { t: 1, x: 0.98, y: 0, facing: 1, scale: 1.04, expression: 'angry' },
+                ],
+              }),
+            ],
+          });
+        }
+      } else {
+        // Case B: General Multi-Line Rule-Based Story Builder for any custom sprite/actor dialogue script
+        const beats = (rawLines.length > 0 ? rawLines : [cleanedDisplayScript]).slice(0, 7);
+        for (let bIdx = 0; bIdx < beats.length; bIdx++) {
+          const line = beats[bIdx];
+          const lineLow = normalizeBn(line).toLowerCase();
+          const sceneBg = pickBgId(lineLow, mainBgId);
+          const colonIdx = line.indexOf(':');
+          let speakerRaw = '';
+          let spokenText = line;
+          if (colonIdx > 0 && colonIdx < 24) {
+            speakerRaw = line.slice(0, colonIdx).trim();
+            spokenText = line.slice(colonIdx + 1).trim();
+          }
+
+          const lineHasCow = /(গরু|হাম্বা|cow)/.test(lineLow) || /(গরু)/.test(speakerRaw);
+          const lineHasTiger = /(বাঘ|হালুম|tiger)/.test(lineLow) || /(বাঘ)/.test(speakerRaw);
+          const lineHasChase = /(দৌড়|পালা|তাড়া|ভাগ|আক্রমণ|গুঁতো)/.test(lineLow);
+          const lineHasScared = /(ভয়|চমক|বাঁচাও|আতঙ্ক)/.test(lineLow);
+          const lineHasSing = /(গান|গাই|সুর)/.test(lineLow);
+
+          const charsInBeat: Array<Record<string, unknown>> = [];
+          const rafuSpeaks =
+            !speakerRaw || /(রাফু|রফু|rafu|ছেলে|ফোক|চাচা)/.test(speakerRaw.toLowerCase());
+          charsInBeat.push(
+            makeRafuChar({
+              spriteId: lineHasChase
+                ? 'rafu_running_away'
+                : lineHasScared
+                  ? 'rafu_scared'
+                  : 'rafu_walk_talk',
+              action: lineHasSing
+                ? 'singing'
+                : lineHasChase
+                  ? 'flee'
+                  : lineHasScared
+                    ? 'scared'
+                    : 'walk_in',
+              expression: lineHasScared || lineHasChase ? 'shocked' : 'happy',
+              speech: rafuSpeaks ? spokenText : '',
+              voiceEffect: lineHasChase ? 'panicked' : 'normal',
+              side: 'left',
+              keyframes: lineHasChase
+                ? [
+                    { t: 0, x: 0.34, y: 0, facing: -1, scale: 1 },
+                    { t: 1, x: -0.18, y: 0, facing: -1, scale: 1 },
+                  ]
+                : [
+                    { t: 0, x: 0.2 + Math.min(0.15, bIdx * 0.04), y: 0, facing: 1, scale: 1 },
+                    { t: 1, x: 0.34, y: 0, facing: 1, scale: 1 },
+                  ],
+            })
+          );
+
+          if (lineHasCow || (hasCow && primaryAnimal === 'cow' && bIdx > 0)) {
+            const cowSpeaks = /(গরু|হাম্বা)/.test(speakerRaw);
+            charsInBeat.push(
+              makeAnimalChar({
+                kindKey: 'cow',
+                spriteId: lineHasChase
+                  ? 'cow_attacking'
+                  : cowSpeaks || /(হাম্বা|ডাক|রাগ)/.test(lineLow)
+                    ? 'cow_mooing'
+                    : 'cow_grass_eating',
+                action: lineHasChase ? 'charge_butt' : cowSpeaks ? 'mooing' : 'grazing',
+                expression: lineHasChase || /(রাগ)/.test(lineLow) ? 'angry' : 'deadpan',
+                speech: cowSpeaks ? spokenText : /(হাম্বা)/.test(lineLow) ? 'হাম্বাআআ!' : '',
+                voiceEffect: 'dramatic_boss',
+                side: 'right',
+                keyframes: lineHasChase
+                  ? [
+                      { t: 0, x: 0.68, y: 0, facing: -1, scale: 1.02 },
+                      { t: 1, x: -0.02, y: 0, facing: -1, scale: 1.04 },
+                    ]
+                  : [
+                      { t: 0, x: 0.72, y: 0, facing: -1, scale: 1 },
+                      { t: 1, x: 0.68, y: 0, facing: -1, scale: 1 },
+                    ],
+              })
+            );
+          } else if (lineHasTiger || (hasTiger && bIdx > 0)) {
+            const tigerSpeaks = /(বাঘ|হালুম)/.test(speakerRaw);
+            charsInBeat.push(
+              makeAnimalChar({
+                kindKey: 'tiger',
+                spriteId: lineHasChase ? 'tiger_run_attack' : 'tiger_walk_roar',
+                action: lineHasChase ? 'chasing' : 'roar',
+                expression: 'angry',
+                speech: tigerSpeaks ? spokenText : /(হালুম|গর্জন)/.test(lineLow) ? 'হালুম!' : '',
+                voiceEffect: 'dramatic_boss',
+                side: 'right',
+                keyframes: [
+                  { t: 0, x: 0.72, y: 0, facing: -1, scale: 1.02 },
+                  { t: 1, x: lineHasChase ? 0.05 : 0.64, y: 0, facing: -1, scale: 1.04 },
+                ],
+              })
+            );
+          } else if (customMatchedSprites.length > 0) {
+            const sp = customMatchedSprites[0];
+            charsInBeat.push(
+              makeAnimalChar({
+                kindKey: 'custom',
+                customSprite: sp,
+                spriteId: sp.id,
+                action: lineHasChase ? 'run' : 'walk',
+                expression: lineHasChase ? 'angry' : 'happy',
+                speech: '',
+                side: 'right',
+                keyframes: [
+                  { t: 0, x: 0.72, y: 0, facing: -1, scale: 1 },
+                  { t: 1, x: 0.66, y: 0, facing: -1, scale: 1 },
+                ],
+              })
+            );
+          }
+
+          localScenes.push({
+            sceneIndex: bIdx,
+            durationSec: Math.max(3.0, Math.min(5.2, 2.4 + spokenText.length * 0.06)),
+            theme: sceneBg,
+            backgroundAssetId: sceneBg,
+            parallax: lineHasChase ? -0.85 : lineHasSing ? 0.5 : 0.15,
+            camera: lineHasChase ? 'shake' : bIdx % 3 === 1 ? 'zoom_right' : 'wide',
+            sfx: lineHasChase ? 'scream_sting' : 'pop',
+            captionTop: line.slice(0, 64),
+            effects: lineHasSing
+              ? [
+                  {
+                    t: 0.15,
+                    duration: 0.8,
+                    type: 'tickle_sparks',
+                    x: 0.35,
+                    y: 0.45,
+                    text: '♪ ♫',
+                    targetCharIndex: 0,
+                  },
+                ]
+              : lineHasChase
+                ? [
+                    { t: 0.1, duration: 0.85, type: 'speed_lines', x: 0.5, y: 0.5 },
+                    { t: 0.25, duration: 0.65, type: 'dust_puff', x: 0.35, y: 0.72, targetCharIndex: 0 },
+                  ]
+                : [],
+            sfxCues: [{ t: 0.1, sfx: lineHasChase ? 'scream_sting' : 'pop' }],
+            characters: charsInBeat,
+          });
+        }
+      }
+
+      const audioAttached = attachAudioAssetsToScenesAndMeta(
+        localScenes,
+        normFull,
+        hasSinging ? 'folk' : 'comedy'
+      );
+      const totalDurationSec = Number(
+        localScenes.reduce((acc, s) => acc + Number(s.durationSec || 3.5), 0).toFixed(1)
+      );
+      const localTitle =
+        rawLines[0]?.slice(0, 42) ||
+        `${primaryHumanName} ও ${primaryAnimal === 'cow' ? 'গরু' : primaryAnimal === 'tiger' ? 'বাঘ' : 'বন্ধুর'} কাণ্ড`;
+
+      return res.json({
+        id: `vid_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        title: localTitle,
+        hookBanner: localTitle,
+        category: 'লোকাল স্ক্রিপ্ট',
+        renderStyle: requestedStyle !== 'auto' ? requestedStyle : 'cartoon_2d',
+        aspectRatio: safeAspect,
+        musicStyle: audioAttached.musicStyle,
+        ...(audioAttached.customBgmUrl ? { customBgmUrl: audioAttached.customBgmUrl } : {}),
+        ...(audioAttached.customBgmAssetId
+          ? { customBgmAssetId: audioAttached.customBgmAssetId }
+          : {}),
+        ...(audioAttached.customBgmName ? { customBgmName: audioAttached.customBgmName } : {}),
+        storyArc: localScenes.length <= 3 ? 'quick_short' : 'viral_story',
+        subtitleStyle: 'reels_bold',
+        totalDurationSec,
+        scenes: localScenes,
+        fbCaption: `${localTitle} 😂 #RafuFolk #BanglaCartoon`,
+        createdAt: new Date().toISOString(),
+        seed: Math.floor(Math.random() * 900000) + 100000,
+      });
+    }
 
     const availableBackgrounds = hybridCatalog
       .filter((a) => a.category === 'background')
@@ -1259,7 +2187,7 @@ app.post('/api/generate-video', async (req, res) => {
     const dialogueInstruction =
       dialogueMode === 'silent'
         ? 'Silent slapstick mode: set every character speech to "" and convey humor visually + SFX.'
-        : 'Spoken Bengali AI Dubbing mode: keep lines punchy, natural, and conversational in Bangladeshi Bengali (or preserve Banglish if written in Banglish). Remove stage-direction parentheses or emojis from spoken "speech" text so TTS reads cleanly. Set "voiceEffect" based on the emotion of each line: "panicked" for shouting, screaming, panic, crying, or lines with "!" / "?!"; "dramatic_boss" for deep heroic/boss/villain/cinematic lines; "cartoon_high" for silly squeaky punchlines; or "normal" for calm speech.';
+        : 'Spoken Bengali AI Dubbing mode: keep lines punchy, natural, and conversational in Bangladeshi Bengali (or preserve Banglish if written in Banglish). Remove stage-direction parentheses or emojis from spoken "speech" text so TTS reads cleanly. Set "voiceEffect" based on the emotion of each line: "panicked" for shouting, screaming, panic, crying, or panicked dialogue (NEVER use "panicked" for happy singing!); "dramatic_boss" for deep heroic/boss/villain/animal roar lines; "cartoon_high" for silly squeaky punchlines; or "normal" for calm speech or singing.';
 
     const avoidList =
       Array.isArray(recentTitles) && recentTitles.length > 0
@@ -1277,16 +2205,16 @@ YOUR JOB AS AN INDEPENDENT CREATIVE AI ANIMATION DIRECTOR:
 2. Read EVERY setting/environment detail in the script ("পরিষ্কার আকাশ", "গ্রাম", "বাজার", "মাঠ", "নদী", "চা-দোকান", "জঙ্গল", "রেল স্টেশন", etc.):
    - Pick the best matching "backgroundAssetId" from the Background catalog below.
    - If the script's setting is NOT in the catalog, invent a clear snake_case "backgroundAssetId" AND write a vivid "backgroundDescription" so our AI auto-draws a bespoke colorful SVG background for that scene!
-3. Cast ONLY the characters that appear in the user's script! If the script only has sprite-sheet animals/vehicles (e.g. গরু ও কুকুর, বাঘ ও ছাগল, রিকশা ও সিএনজি), DO NOT invent unrelated human characters! Keep the user's exact character names ("name") and spoken words ("speech") faithful.
+3. Cast ONLY the characters that appear in the user's script! Note common Bangladeshi Bengali colloquial/typo spellings: "রফু" = "রাফু", "গুরু" (in rural/field/moo/butt contexts alongside গরু/হাম্বা/গুতু) = "গরু" (cow), "গুতু" = "গুঁতো", "দোড়ানি" = "দৌড়ানি" (chasing away). Keep the user's exact song lyrics or spoken lines faithful (cleaned into natural Bengali).
 4. SPRITE-SHEET ACTORS vs HUMANS:
    - Whenever গরু (cow), বাঘ (tiger), or রাফু/রফু/ছেলে (Rafu/boy) appear, ALWAYS set kind="sprite_actor", renderStyle="cartoon_2d", and pick the matching 8-frame spriteAssetId per scene action:
-     * গরু: "cow_grass_eating" (grazing/idle/walking calmly), "cow_mooing" (mooing/speaking/হাম্বা), "cow_attacking" (charging/chasing/angry/গুতো)
+     * গরু: "cow_grass_eating" (grazing/idle/walking calmly), "cow_mooing" (mooing/speaking/হাম্বা), "cow_attacking" (charging/chasing/angry/গুঁতো/তাড়া)
      * বাঘ: "tiger_walk_roar" (walking/roaring/talking/idle), "tiger_run_attack" (running/chasing/pouncing/attacking)
-     * রাফু / রফু / ছেলে: "rafu_walk_talk" (walking/talking/idle), "rafu_scared" (scared/shocked/crying/panicked), "rafu_running_away" (running away/fleeing/escaping)
+     * রাফু / রফু / ছেলে: "rafu_walk_talk" (walking/singing/talking/idle), "rafu_scared" (scared/shocked/crying/panicked), "rafu_running_away" (running away/fleeing/escaping)
    - Any other character matching our Sprite Actor catalog (কুকুর, ছাগল, বিড়াল, কাক, রিকশা, সিএনজি, or user-uploaded custom sheets): set kind="sprite_actor", renderStyle="cartoon_2d", and set the matching "spriteAssetId" per scene!
    - Any other human character (ফোক, চাচা, বস, দোকানদার) with NO sprite sheet: set kind="human_rig", pick a fitting "outfitStyle", and animate with articulated limb keyframes.
-5. Break the script naturally into 2 to 8 expressive scenes (each 2.5–8.5s). Use descriptive freeform "action" values matching the story (e.g., "grazing", "mooing", "walk_in", "run", "flee", "scared", "chasing", "roar", "charge_butt", "shocked_jump", "idle", etc.).
-6. SILENT VS SPOKEN CHARACTERS: Only give spoken "speech" lines to characters who actually speak or make sounds in the script. If an animal acts silently in a scene, set speech="" and tell the action via captionTop, keyframes, effects, and sfxCues!`
+5. MULTI-PASS CARTOON CHASE & PARALLAX: Break the script naturally into 2 to 8 expressive scenes (each 2.5–8.5s). Set scene.parallax (e.g. +0.5 when walking right, -0.9 when running left, +0.95 when chasing right) for lively camera scrolling! Whenever an animal/villain chases someone (তাড়া/দৌড়ানি), choreograph TWO exciting chase scenes: Pass 1 exiting off the left edge (x: 0.36 -> -0.22), followed by Pass 2 re-entering from the left edge and sprinting across to exit the right edge (x: -0.18 -> 1.18)!
+6. ANIMAL SOUND DISCIPLINE: Keep cow/tiger speech strictly to natural animal sounds ("হাম্বাআআ!", "হালুম!") unless human speech is explicitly scripted. If an animal acts silently, set speech="".`
       : `CREATE AN ORIGINAL, 100% COPYRIGHT-FREE BENGALI SHORT VIDEO FREELY:
 ${
   rawHint
@@ -1304,17 +2232,18 @@ AVAILABLE ASSET CATALOG (USER-UPLOADED + BUILT-IN):
 - Sprite-Sheet Characters ("spriteAssetId" when kind="sprite_actor"): ${availableSpriteActors || 'none'}
 
 ANIMATION & KEYFRAME DIRECTION RULES:
-- Canvas coordinates: x = 0.0 (left edge) to 1.0 (right edge), center = 0.5. Keep static speaking characters between x = 0.16 and x = 0.84. When entering or exiting offscreen, animate x from/to -0.25 or 1.25!
-- Vertical y: 0.0 = standing firmly on ground (never below -0.02 for ground poses). Use y = +0.12 to +0.38 for jumping/airborne!
+- Canvas coordinates: x = 0.0 (left edge) to 1.0 (right edge), center = 0.5. Keep static/resting characters (especially wide animals like cow/tiger) safely inside x = 0.22 to 0.76 so they never clip off screen edges! When entering or exiting offscreen, animate x from/to -0.20 or 1.20.
+- Movement continuity: A chasing character MUST move forward in the direction it faces (e.g., facing -1 moves from right to left, x: 0.74 -> 0.42; NEVER move backward while facing forward!).
+- Vertical y: 0.0 = standing firmly on ground (never below -0.02 for ground poses). Use y = +0.12 to +0.34 for jumping/airborne!
 - facing: 1 = facing right, -1 = facing left. Face the direction of movement or toward the scene partner.
 - For kind="sprite_actor" (all sprite-sheet characters):
   * Always set kind="sprite_actor" and a valid "spriteAssetId" from the catalog above.
   * Provide clean keyframes with t, x, y (>=0), facing, rotationDeg (0 upright), scale, expression.
-  * IMPORTANT: Leave "spriteFrame" UNSET during walking/running/moving keyframes so the engine smoothly animates across the sprite sheet frames! Only set spriteFrame: 3 at a brief climax impact/attack keyframe if desired.
+  * IMPORTANT: Leave "spriteFrame" UNSET during walking/running/moving keyframes so the engine smoothly animates across the sprite sheet frames!
 - For kind="human_rig" (humans):
   * outfitStyle: "casual" | "lungi_panjabi" | "farmer" | "office_suit" | "student" | "shopkeeper" | "police".
   * Set keyframes with t, x, y, facing, rotationDeg, curlBall, torsoLeanDeg, headTiltDeg, leftArmDeg, rightArmDeg, leftLegDeg, rightLegDeg, vibrate, heldProp ("none", "smartphone", "tea_cup", "money", "stick", "umbrella", "football", "bucket", "book").
-- Scene "effects": ALWAYS set "targetCharIndex" (0-based index in scene.characters) for "impact_star", "tickle_sparks", "sweat_burst", and "laugh_burst" so effects anchor onto the character.
+- Scene "effects": ALWAYS set "targetCharIndex" (0-based index in scene.characters) for "impact_star", "tickle_sparks", "sweat_burst", "dust_puff", and "laugh_burst". Only use "laugh_burst" for actual laughter (if singing, use "tickle_sparks" with text "♪ ♫"). Keep dust_puff near y=0.72!
 - Scene "sfxCues": fire timed SFX at exact comedic/dramatic moments t (0..1) inside the scene.`;
 
     const ai = getGeminiClient();
@@ -1333,9 +2262,9 @@ Output JSON with:
 - hookBanner: short viral 3-6 word Bengali hook for the top banner
 - category: short Bengali topic label
 - renderStyle: "cartoon_2d" or "stick_meme"
-- musicStyle: "comedy" | "quirky" | "dramatic" | "cinematic_parody" | "none"
+- musicStyle: "folk" | "comedy" | "quirky" | "dramatic" | "cinematic_parody" | "none"
 - fbCaption: engaging Facebook Reels caption with a question and 2-3 hashtags
-- scenes: array of 2 to 8 scenes with backgroundAssetId (and optional backgroundDescription), character kind/spriteAssetId/outfitStyle, keyframes, effects, and sfxCues.`;
+- scenes: array of 2 to 8 scenes with backgroundAssetId (and optional backgroundDescription), parallax (-1..1), character kind/spriteAssetId/outfitStyle, keyframes, effects, and sfxCues.`;
 
     const response = await generateJsonWithRetryAndFallback({
       ai,
@@ -1351,7 +2280,7 @@ Output JSON with:
           renderStyle: { type: Type.STRING, enum: ['stick_meme', 'cartoon_2d'] },
           musicStyle: {
             type: Type.STRING,
-            enum: ['comedy', 'quirky', 'dramatic', 'cinematic_parody', 'none'],
+            enum: ['folk', 'comedy', 'quirky', 'dramatic', 'cinematic_parody', 'none'],
           },
           fbCaption: { type: Type.STRING },
           scenes: {
@@ -1364,6 +2293,7 @@ Output JSON with:
                 theme: { type: Type.STRING },
                 backgroundAssetId: { type: Type.STRING },
                 backgroundDescription: { type: Type.STRING },
+                parallax: { type: Type.NUMBER },
                 camera: {
                   type: Type.STRING,
                   enum: ['wide', 'zoom_left', 'zoom_right', 'zoom_center', 'shake'],
@@ -1631,13 +2561,14 @@ Output JSON with:
           : 'stick_meme';
 
     const chosenMusic = [
+      'folk',
       'comedy',
       'quirky',
       'dramatic',
       'cinematic_parody',
       'none',
     ].includes(String(parsed.musicStyle))
-      ? parsed.musicStyle
+      ? String(parsed.musicStyle)
       : 'cinematic_parody';
 
     const knownAssetIds = new Set(hybridCatalog.map((a) => a.id.toLowerCase()));
@@ -1677,7 +2608,11 @@ Output JSON with:
     ): HybridAssetMeta | undefined => {
       const nameLow = charName.toLowerCase().replace(/গুরু/g, 'গরু');
       const spLow = requestedId.toLowerCase();
-      const ctxLow = `${charAction} ${charExpr} ${charSpeech} ${sceneCaption}`.toLowerCase();
+      const actionLow = charAction.toLowerCase();
+      const ctxLow = `${actionLow} ${charSpeech} ${sceneCaption}`
+        .toLowerCase()
+        .replace(/গুতু/g, 'গুঁতো')
+        .replace(/দোড়ানি/g, 'দৌড়ানি');
 
       const findById = (id: string) =>
         spriteCatalog.find((a) => a.id.toLowerCase() === id.toLowerCase());
@@ -1686,18 +2621,22 @@ Output JSON with:
         spLow.startsWith('cow') ||
         /(গরু|গাভী|ষাঁড়|বাছুর|\bcow\b|\bbull\b|\bcattle\b)/.test(nameLow)
       ) {
+        const calmGrazingAction = /(graz|eat_grass|eat|idle|calm|rest)/.test(actionLow);
+        const mooCue =
+          spLow === 'cow_mooing' ||
+          /(moo|হাম্বা|ডাক)/.test(actionLow) ||
+          /(moo|হাম্বা|ডাক|talk|speak|কথা)/.test(ctxLow);
+        const attackActionOrCtx = /(attack|charge|butt|chase|গুতো|গুঁতো|তাড়া|তেড়ে|আক্রমণ|ধাক্কা|দৌড়ানি)/.test(
+          ctxLow
+        );
         if (
           spLow === 'cow_attacking' ||
-          charExpr.toLowerCase() === 'angry' ||
-          /(attack|charge|butt|chase|angry|গুতো|গুঁতো|তাড়া|তেড়ে|আক্রমণ|ধাক্কা|রাগ)/.test(ctxLow)
+          attackActionOrCtx ||
+          (charExpr.toLowerCase() === 'angry' && !calmGrazingAction && !mooCue)
         ) {
           return findById('cow_attacking');
         }
-        if (
-          spLow === 'cow_mooing' ||
-          charSpeech.trim().length > 0 ||
-          /(moo|হাম্বা|ডাক|talk|speak|কথা)/.test(ctxLow)
-        ) {
+        if (mooCue || charSpeech.trim().length > 0) {
           return findById('cow_mooing');
         }
         return findById('cow_grass_eating');
@@ -1993,6 +2932,12 @@ Output JSON with:
       scenes.push(cleanedScene);
     }
 
+    const audioAttached = attachAudioAssetsToScenesAndMeta(
+      scenes,
+      fullStoryContext,
+      chosenMusic
+    );
+
     const totalDurationSec = Number(
       scenes
         .reduce((acc: number, s) => acc + Number(s.durationSec || 4.0), 0)
@@ -2006,7 +2951,12 @@ Output JSON with:
       category: String(parsed.category || (isCustomScriptMode ? 'নিজস্ব স্ক্রিপ্ট' : 'বাংলা কমেডি')),
       renderStyle: chosenStyle,
       aspectRatio: safeAspect,
-      musicStyle: chosenMusic,
+      musicStyle: audioAttached.musicStyle,
+      ...(audioAttached.customBgmUrl ? { customBgmUrl: audioAttached.customBgmUrl } : {}),
+      ...(audioAttached.customBgmAssetId
+        ? { customBgmAssetId: audioAttached.customBgmAssetId }
+        : {}),
+      ...(audioAttached.customBgmName ? { customBgmName: audioAttached.customBgmName } : {}),
       storyArc: scenes.length <= 3 ? 'quick_short' : 'viral_story',
       subtitleStyle: chosenStyle === 'stick_meme' ? 'meme_clean' : 'reels_bold',
       totalDurationSec,
@@ -2045,6 +2995,16 @@ const CHARACTER_VOICE_MAP: Record<
     geminiVoice: 'Fenrir',
     geminiStyle: 'Deep authoritative bossy Bangladeshi voice',
   },
+  cow: {
+    edgeVoice: 'bn-BD-PradeepNeural',
+    geminiVoice: 'Fenrir',
+    geminiStyle: 'Deep roaring animal cow voice',
+  },
+  tiger: {
+    edgeVoice: 'bn-BD-PradeepNeural',
+    geminiVoice: 'Fenrir',
+    geminiStyle: 'Deep fierce roaring tiger voice',
+  },
   chacha: {
     edgeVoice: 'bn-BD-PradeepNeural',
     geminiVoice: 'Charon',
@@ -2057,8 +3017,14 @@ const CHARACTER_VOICE_MAP: Record<
   },
 };
 
-function resolveVoicePersonaKey(characterId: string): string {
-  const key = String(characterId || '').toLowerCase();
+function resolveVoicePersonaKey(characterId: string, characterName = ''): string {
+  const key = `${characterId || ''} ${characterName || ''}`.toLowerCase().trim();
+  if (/(রাফু|রফু|rafu|rofu)/.test(key)) return 'rafu';
+  if (/(গরু|গুরু|গাভী|cow|bull)/.test(key)) return 'cow';
+  if (/(বাঘ|tiger|lion)/.test(key)) return 'tiger';
+  if (/(বস|boss)/.test(key)) return 'boss';
+  if (/(চাচা|chacha)/.test(key)) return 'chacha';
+  if (/(ফোক|folk)/.test(key)) return 'folk';
   if (key in CHARACTER_VOICE_MAP) return key;
   let hash = 0;
   for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
@@ -2108,36 +3074,41 @@ async function applyVoiceFxWithFfmpeg(
   rawBuffer: Buffer,
   inputExt: 'mp3' | 'wav',
   characterId: string,
-  voiceEffect: string
+  voiceEffect: string,
+  characterName = ''
 ): Promise<Buffer> {
   let pitch = 1.0;
   let tempo = 1.0;
   let extraFilters = '';
 
+  const personaKey = resolveVoicePersonaKey(characterId, characterName);
+
   if (voiceEffect === 'panicked') {
-    pitch = 1.15;
-    tempo = 1.18;
-    extraFilters =
-      ',treble=g=4:f=3200,acompressor=threshold=-20dB:ratio=4.5:attack=4:release=55,volume=2.3,alimiter=limit=0.95';
-  } else if (voiceEffect === 'dramatic_boss') {
-    pitch = 0.77;
-    tempo = 0.90;
-    extraFilters =
-      ',bass=g=8:f=105,aecho=0.8:0.75:48:0.38,acompressor=threshold=-18dB:ratio=5:attack=4:release=75,volume=2.45,alimiter=limit=0.95';
-  } else if (voiceEffect === 'cartoon_high') {
-    pitch = 1.24;
+    pitch = personaKey === 'cow' || personaKey === 'tiger' || personaKey === 'boss' ? 0.92 : 1.07;
     tempo = 1.12;
     extraFilters =
-      ',treble=g=3:f=2800,acompressor=threshold=-19dB:ratio=4:attack=5:release=60,volume=2.15,alimiter=limit=0.95';
+      ',treble=g=3:f=3000,acompressor=threshold=-20dB:ratio=4.2:attack=4:release=55,volume=2.25,alimiter=limit=0.95';
+  } else if (voiceEffect === 'dramatic_boss' || personaKey === 'cow' || personaKey === 'tiger') {
+    pitch = personaKey === 'cow' || personaKey === 'tiger' ? 0.75 : 0.79;
+    tempo = 0.92;
+    extraFilters =
+      ',bass=g=8:f=105,aecho=0.75:0.7:42:0.3,acompressor=threshold=-18dB:ratio=5:attack=4:release=75,volume=2.45,alimiter=limit=0.95';
+  } else if (voiceEffect === 'cartoon_high') {
+    pitch = 1.18;
+    tempo = 1.09;
+    extraFilters =
+      ',treble=g=2.5:f=2800,acompressor=threshold=-19dB:ratio=4:attack=5:release=60,volume=2.15,alimiter=limit=0.95';
   } else {
     const defaults: Record<string, { p: number; t: number }> = {
-      rafu: { p: 1.08, t: 1.07 },
+      rafu: { p: 1.05, t: 1.05 },
       folk: { p: 0.96, t: 1.02 },
       boss: { p: 0.84, t: 0.96 },
+      cow: { p: 0.76, t: 0.94 },
+      tiger: { p: 0.74, t: 0.95 },
       chacha: { p: 0.88, t: 0.95 },
-      friend: { p: 1.09, t: 1.07 },
+      friend: { p: 1.08, t: 1.06 },
     };
-    const d = defaults[resolveVoicePersonaKey(characterId)] || { p: 1.0, t: 1.0 };
+    const d = defaults[personaKey] || { p: 1.0, t: 1.0 };
     pitch = d.p;
     tempo = d.t;
     extraFilters =
@@ -2186,7 +3157,8 @@ async function applyVoiceFxWithFfmpeg(
 async function synthesizeWithFreeBengaliTts(
   text: string,
   characterId: string,
-  voiceEffect: string
+  voiceEffect: string,
+  characterName = ''
 ): Promise<{ buffer: Buffer; mime: string; durationSec: number }> {
   const chunksText = text.length <= 180 ? [text] : text.match(/.{1,170}(\s|$)/g) || [text];
   const rawParts: Buffer[] = [];
@@ -2204,7 +3176,7 @@ async function synthesizeWithFreeBengaliTts(
   let finalBuffer: Buffer = rawBuffer;
   try {
     finalBuffer = Buffer.from(
-      await applyVoiceFxWithFfmpeg(rawBuffer, 'mp3', characterId, voiceEffect)
+      await applyVoiceFxWithFfmpeg(rawBuffer, 'mp3', characterId, voiceEffect, characterName)
     );
   } catch {
     finalBuffer = rawBuffer;
@@ -2216,9 +3188,11 @@ async function synthesizeWithFreeBengaliTts(
 async function synthesizeWithEdgeTts(
   text: string,
   characterId: string,
-  voiceEffect: string
+  voiceEffect: string,
+  characterName = ''
 ): Promise<{ buffer: Buffer; mime: string; durationSec: number }> {
-  const persona = CHARACTER_VOICE_MAP[resolveVoicePersonaKey(characterId)] || CHARACTER_VOICE_MAP.rafu;
+  const persona =
+    CHARACTER_VOICE_MAP[resolveVoicePersonaKey(characterId, characterName)] || CHARACTER_VOICE_MAP.rafu;
   const tts = new MsEdgeTTS();
   await tts.setMetadata(persona.edgeVoice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
   const { audioStream } = tts.toStream(text);
@@ -2243,7 +3217,7 @@ async function synthesizeWithEdgeTts(
   let finalBuffer: Buffer = rawBuffer;
   try {
     finalBuffer = Buffer.from(
-      await applyVoiceFxWithFfmpeg(rawBuffer, 'mp3', characterId, voiceEffect)
+      await applyVoiceFxWithFfmpeg(rawBuffer, 'mp3', characterId, voiceEffect, characterName)
     );
   } catch {
     finalBuffer = rawBuffer;
@@ -2255,9 +3229,11 @@ async function synthesizeWithEdgeTts(
 async function synthesizeWithGeminiTts(
   text: string,
   characterId: string,
-  voiceEffect: string
+  voiceEffect: string,
+  characterName = ''
 ): Promise<{ buffer: Buffer; mime: string; durationSec: number }> {
-  const persona = CHARACTER_VOICE_MAP[resolveVoicePersonaKey(characterId)] || CHARACTER_VOICE_MAP.rafu;
+  const persona =
+    CHARACTER_VOICE_MAP[resolveVoicePersonaKey(characterId, characterName)] || CHARACTER_VOICE_MAP.rafu;
   const styleHint =
     voiceEffect === 'dramatic_boss'
       ? 'Loud, roaring, furious dramatic movie villain shouting in Bangladeshi Bengali with heavy intensity'
@@ -2340,9 +3316,12 @@ app.post('/api/video/synthesize-voices', async (req, res) => {
         characters?: Array<{
           id: string;
           name: string;
+          action?: string;
           speech?: string;
           voiceEffect?: string;
           customAudioDataUrl?: string;
+          customAudioUrl?: string;
+          customAudioAssetId?: string;
         }>;
       };
 
@@ -2351,46 +3330,51 @@ app.post('/api/video/synthesize-voices', async (req, res) => {
 
       for (let cIdx = 0; cIdx < chars.length; cIdx++) {
         const ch = chars[cIdx];
-        if (ch.customAudioDataUrl) {
-          sceneCursor += 1.5;
+        if (ch.customAudioDataUrl || ch.customAudioUrl || ch.customAudioAssetId) {
+          sceneCursor += 1.8;
           continue;
         }
         const rawSpeech = String(ch.speech || '').trim();
         const cleanSpeech = stripEmojisForTts(rawSpeech);
         if (!cleanSpeech) continue;
 
+        const isSingingAction = /(sing|গান|সুর)/i.test(String(ch.action || ''));
         let effect = String(ch.voiceEffect || 'normal');
-        if (effect === 'normal' && (rawSpeech.includes('!') || rawSpeech.includes('?!'))) {
+        if (
+          !isSingingAction &&
+          effect === 'normal' &&
+          (rawSpeech.includes('!') || rawSpeech.includes('?!'))
+        ) {
           effect = 'panicked';
+        } else if (isSingingAction && effect === 'panicked') {
+          effect = 'normal';
         }
 
         let synth: { buffer: Buffer; mime: string; durationSec: number } | null = null;
         let usedProvider: 'edge_tts' | 'gemini_tts' = 'edge_tts';
 
-        const tryGeminiFirst =
-          Boolean(process.env.GEMINI_API_KEY) &&
-          (voiceEngine === 'gemini_tts' ||
-            (voiceEngine === 'auto' && (effect === 'dramatic_boss' || effect === 'panicked')));
+        // Keep same character voice engine consistent across scenes in 'auto' mode (Edge TTS bd-BD Bengali + FFmpeg FX)
+        const tryGeminiFirst = Boolean(process.env.GEMINI_API_KEY) && voiceEngine === 'gemini_tts';
 
         if (tryGeminiFirst) {
           try {
-            synth = await synthesizeWithGeminiTts(cleanSpeech, ch.id, effect);
+            synth = await synthesizeWithGeminiTts(cleanSpeech, ch.id, effect, ch.name);
             usedProvider = 'gemini_tts';
           } catch {
             try {
-              synth = await synthesizeWithEdgeTts(cleanSpeech, ch.id, effect);
+              synth = await synthesizeWithEdgeTts(cleanSpeech, ch.id, effect, ch.name);
               usedProvider = 'edge_tts';
             } catch {
-              synth = await synthesizeWithFreeBengaliTts(cleanSpeech, ch.id, effect);
+              synth = await synthesizeWithFreeBengaliTts(cleanSpeech, ch.id, effect, ch.name);
               usedProvider = 'edge_tts';
             }
           }
         } else {
           try {
-            synth = await synthesizeWithEdgeTts(cleanSpeech, ch.id, effect);
+            synth = await synthesizeWithEdgeTts(cleanSpeech, ch.id, effect, ch.name);
             usedProvider = 'edge_tts';
           } catch {
-            synth = await synthesizeWithFreeBengaliTts(cleanSpeech, ch.id, effect);
+            synth = await synthesizeWithFreeBengaliTts(cleanSpeech, ch.id, effect, ch.name);
             usedProvider = 'edge_tts';
           }
         }
