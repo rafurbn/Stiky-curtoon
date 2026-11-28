@@ -225,6 +225,7 @@ export type VideoMusicStyle =
   | 'quirky'
   | 'dramatic'
   | 'cinematic_parody'
+  | 'folk'
   | 'none';
 
 export type VideoVoiceEngine = 'auto' | 'edge_tts' | 'gemini_tts' | 'none';
@@ -248,7 +249,7 @@ export interface VideoVoiceClip {
   audioDataUrl: string;
   durationSec: number;
   offsetInSceneSec: number;
-  provider: 'edge_tts' | 'gemini_tts' | 'custom_upload';
+  provider: 'edge_tts' | 'gemini_tts' | 'custom_upload' | 'custom_asset';
 }
 
 export type HeldPropType =
@@ -337,6 +338,8 @@ export interface VideoCharacterState {
   speech?: string;
   voiceEffect?: VoiceEffectPreset;
   customAudioDataUrl?: string;
+  customAudioUrl?: string;
+  customAudioAssetId?: string;
   keyframes?: CharacterKeyframe[];
   kind?: CharacterKind;
   spriteAssetId?: string;
@@ -354,13 +357,29 @@ export interface VideoScene {
   sfx: VideoSfx;
   captionTop?: string;
   splitScreen?: boolean;
+  parallax?: number; // horizontal background scroll direction/speed (-1..1)
   characters: VideoCharacterState[];
   effects?: SceneVisualEffect[];
   sfxCues?: SceneSfxCue[];
 }
 
-export type HybridAssetCategory = 'background' | 'sprite_actor' | 'prop';
-export type HybridAssetFormat = 'svg' | 'svg_spritesheet' | 'png_spritesheet' | 'png';
+export type HybridAssetCategory =
+  | 'background'
+  | 'sprite_actor'
+  | 'prop'
+  | 'audio_song'
+  | 'audio_bgm'
+  | 'audio_sfx';
+
+export type HybridAssetFormat =
+  | 'svg'
+  | 'svg_spritesheet'
+  | 'png_spritesheet'
+  | 'png'
+  | 'mp3'
+  | 'wav'
+  | 'ogg'
+  | 'm4a';
 
 export interface HybridAssetItem {
   id: string;
@@ -385,6 +404,9 @@ export interface VideoScript {
   renderStyle?: VideoRenderStyle;
   aspectRatio: VideoAspectRatio;
   musicStyle: VideoMusicStyle;
+  customBgmUrl?: string;
+  customBgmAssetId?: string;
+  customBgmName?: string;
   totalDurationSec: number;
   scenes: VideoScene[];
   fbCaption: string;
