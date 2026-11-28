@@ -1,4 +1,5 @@
 import type { VideoMusicStyle, VideoScript, VideoSfx, VideoVoiceClip } from '../types/comic';
+import { getAudioBackupDataUrl, resolveAssetUrlWithBackup } from './hybridSpriteCatalog';
 
 export interface AudioSession {
   stream: MediaStream;
@@ -333,6 +334,52 @@ function scheduleBackgroundMusic(
     return;
   }
 
+  if (style === 'folk') {
+    // 100% original copyright-free Bengali rural folk Dotara pluck + soft Bansuri pentatonic melody
+    const tempo = 0.29;
+    const dotaraNotes = [261.63, 293.66, 329.63, 392.0, 440.0, 392.0, 329.63, 293.66];
+    const bansuriNotes = [523.25, 0, 587.33, 659.25, 0, 783.99, 659.25, 587.33];
+    const baseTime = ctx.currentTime + 0.05;
+    const remaining = Math.max(0, totalSec - startOffsetSec);
+    const steps = Math.floor(remaining / tempo);
+
+    for (let i = 0; i < steps; i++) {
+      const absTime = startOffsetSec + i * tempo;
+      const t = baseTime + (absTime - startOffsetSec);
+      const dFreq = dotaraNotes[i % dotaraNotes.length];
+
+      const pluck = ctx.createOscillator();
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 1150;
+      const pGain = ctx.createGain();
+      pluck.type = 'triangle';
+      pluck.frequency.setValueAtTime(dFreq, t);
+      pGain.gain.setValueAtTime(0.001, t);
+      pGain.gain.linearRampToValueAtTime(0.085, t + 0.014);
+      pGain.gain.exponentialRampToValueAtTime(0.001, t + tempo * 0.72);
+      pluck.connect(lp).connect(pGain).connect(musicTarget);
+      pluck.start(t);
+      pluck.stop(t + tempo * 0.78);
+
+      const bFreq = bansuriNotes[i % bansuriNotes.length];
+      if (bFreq > 0 && i % 2 === 0) {
+        const flute = ctx.createOscillator();
+        const fGain = ctx.createGain();
+        flute.type = 'sine';
+        flute.frequency.setValueAtTime(bFreq, t);
+        flute.frequency.linearRampToValueAtTime(bFreq * 1.01, t + tempo * 0.9);
+        fGain.gain.setValueAtTime(0.001, t);
+        fGain.gain.linearRampToValueAtTime(0.04, t + 0.08);
+        fGain.gain.exponentialRampToValueAtTime(0.001, t + tempo * 1.65);
+        flute.connect(fGain).connect(musicTarget);
+        flute.start(t);
+        flute.stop(t + tempo * 1.75);
+      }
+    }
+    return;
+  }
+
   const tempo = style === 'dramatic' ? 0.34 : style === 'quirky' ? 0.25 : 0.28;
   const scales: Record<'comedy' | 'quirky' | 'dramatic', number[]> = {
     comedy: [261.63, 329.63, 392.0, 329.63, 293.66, 349.23, 392.0, 440.0],
@@ -364,13 +411,24 @@ function scheduleBackgroundMusic(
 
 async function decodeAudioDataUrl(
   ctx: AudioContext,
-  dataUrl: string
+  urlOrDataUrl: string,
+  backupDataUrl?: string
 ): Promise<AudioBuffer | null> {
   try {
-    const res = await fetch(dataUrl);
+    const res = await fetch(urlOrDataUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const arr = await res.arrayBuffer();
     return await ctx.decodeAudioData(arr);
   } catch {
+    if (backupDataUrl && backupDataUrl !== urlOrDataUrl) {
+      try {
+        const res2 = await fetch(backupDataUrl);
+        const arr2 = await res2.arrayBuffer();
+        return await ctx.decodeAudioData(arr2);
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
 }
@@ -418,10 +476,29 @@ export async function startVideoAudioSession(
   voiceGain.connect(compressor);
 
   const totalSec = script.scenes.reduce((acc, s) => acc + Math.max(1.5, s.durationSec), 0);
-
-  scheduleBackgroundMusic(ctx, musicGain, script.musicStyle, totalSec, startOffsetSec);
-
   const baseTime = ctx.currentTime + 0.05;
+
+  const customBgmSrc = resolveAssetUrlWithBackup(script.customBgmUrl, script.customBgmAssetId);
+  let playedCustomBgm = false;
+  if (customBgmSrc && script.musicStyle !== 'none') {
+    const bgmBackup = getAudioBackupDataUrl(script.customBgmUrl, script.customBgmAssetId);
+    const bgmBuf = await decodeAudioDataUrl(ctx, customBgmSrc, bgmBackup);
+    if (bgmBuf && bgmBuf.duration > 0.2) {
+      const remaining = Math.max(0.2, totalSec - startOffsetSec);
+      const bgmSrcNode = ctx.createBufferSource();
+      bgmSrcNode.buffer = bgmBuf;
+      bgmSrcNode.loop = true;
+      bgmSrcNode.connect(musicGain);
+      const loopOffset = startOffsetSec % bgmBuf.duration;
+      bgmSrcNode.start(baseTime, loopOffset, remaining);
+      playedCustomBgm = true;
+    }
+  }
+
+  if (!playedCustomBgm) {
+    scheduleBackgroundMusic(ctx, musicGain, script.musicStyle, totalSec, startOffsetSec);
+  }
+
   let cursor = 0;
 
   const duckWindows: Array<{ start: number; end: number }> = [];
@@ -450,8 +527,12 @@ export async function startVideoAudioSession(
 
     for (let cIdx = 0; cIdx < sc.characters.length; cIdx++) {
       const ch = sc.characters[cIdx];
-      if (ch.customAudioDataUrl) {
-        const buf = await decodeAudioDataUrl(ctx, ch.customAudioDataUrl);
+      const customCharAudio =
+        ch.customAudioDataUrl ||
+        resolveAssetUrlWithBackup(ch.customAudioUrl, ch.customAudioAssetId);
+      if (customCharAudio) {
+        const backup = getAudioBackupDataUrl(ch.customAudioUrl, ch.customAudioAssetId);
+        const buf = await decodeAudioDataUrl(ctx, customCharAudio, backup);
         if (buf) {
           const offsetInScene = cIdx === 0 ? 0.2 : Math.min(sceneDur * 0.45, 2.0);
           const absStart = sceneStart + offsetInScene;
@@ -461,10 +542,11 @@ export async function startVideoAudioSession(
             src.connect(voiceGain);
             const delay = Math.max(0, absStart - startOffsetSec);
             const trimStart = Math.max(0, startOffsetSec - absStart);
-            src.start(baseTime + delay, trimStart);
+            const maxPlay = Math.max(0.2, sceneDur - offsetInScene + 0.35);
+            src.start(baseTime + delay, trimStart, Math.min(buf.duration - trimStart, maxPlay));
             duckWindows.push({
               start: baseTime + delay,
-              end: baseTime + delay + Math.max(0.2, buf.duration - trimStart),
+              end: baseTime + delay + Math.max(0.2, Math.min(buf.duration - trimStart, maxPlay)),
             });
           }
         }
@@ -484,7 +566,7 @@ export async function startVideoAudioSession(
     for (const clip of clips) {
       const sc = script.scenes[clip.sceneIndex];
       const ch = sc?.characters?.[clip.charIndex];
-      if (ch?.customAudioDataUrl) continue;
+      if (ch?.customAudioDataUrl || ch?.customAudioUrl || ch?.customAudioAssetId) continue;
 
       const sStart = sceneOffsets[clip.sceneIndex] ?? 0;
       const absStart = sStart + (clip.offsetInSceneSec ?? 0.2);

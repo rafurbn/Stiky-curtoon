@@ -280,6 +280,36 @@ const spriteMetricsByImg = new WeakMap<HTMLImageElement, SpriteSheetMetrics>();
 const fallbackDataUrlByAssetUrl = new Map<string, string>();
 const pendingLoads = new Map<string, Promise<HTMLImageElement | null>>();
 
+export function isAudioAssetCategory(cat?: HybridAssetItem['category']): boolean {
+  return cat === 'audio_song' || cat === 'audio_bgm' || cat === 'audio_sfx';
+}
+
+export function resolveAssetUrlWithBackup(url?: string, assetId?: string): string | undefined {
+  if (assetId && fallbackDataUrlByAssetUrl.has(assetId)) {
+    const byId = fallbackDataUrlByAssetUrl.get(assetId);
+    if (url && !url.startsWith('data:')) return url;
+    if (byId) return byId;
+  }
+  if (url) {
+    return url;
+  }
+  if (assetId) {
+    const asset = findAssetByIdOrTheme(assetId);
+    return asset?.url || fallbackDataUrlByAssetUrl.get(assetId);
+  }
+  return undefined;
+}
+
+export function getAudioBackupDataUrl(url?: string, assetId?: string): string | undefined {
+  if (assetId && fallbackDataUrlByAssetUrl.has(assetId)) {
+    return fallbackDataUrlByAssetUrl.get(assetId);
+  }
+  if (url && fallbackDataUrlByAssetUrl.has(url)) {
+    return fallbackDataUrlByAssetUrl.get(url);
+  }
+  return undefined;
+}
+
 export function getSpriteSheetMetrics(
   img: HTMLImageElement | null | undefined
 ): SpriteSheetMetrics | undefined {
@@ -778,30 +808,32 @@ export function selectActionAwareSpriteId(
   const actionLow = (char.action || '').toLowerCase();
   const expLow = (char.expression || '').toLowerCase();
   const speechLow = (char.speech || '').toLowerCase();
+  const normalizedCtx = `${actionLow} ${speechLow} ${sceneContext.toLowerCase()}`
+    .replace(/গুতু/g, 'গুঁতো')
+    .replace(/দোড়ানি/g, 'দৌড়ানি');
 
   // Cow family -> 8-frame sheets
   if (
     spIdLow.startsWith('cow') ||
     /(গরু|গাভী|ষাঁড়|বাছুর|\bcow\b|\bbull\b|\bcattle\b)/.test(charNameLow)
   ) {
+    const calmGrazing = /(graz|eat_grass|eat|idle|calm|rest)/.test(actionLow);
+    const mooCue =
+      spIdLow === 'cow_mooing' ||
+      isActionMatch(actionLow, /(moo|হাম্বা|ডাক)/) ||
+      isActionMatch(normalizedCtx, /(moo|হাম্বা|ডাক|talk|speak|কথা)/);
+    const attackCue = isActionMatch(
+      normalizedCtx,
+      /(attack|charge|butt|chase|গুতো|গুঁতো|তাড়া|তেড়ে|আক্রমণ|ধাক্কা|দৌড়ানি)/
+    );
     if (
       spIdLow === 'cow_attacking' ||
-      expLow === 'angry' ||
-      isActionMatch(
-        `${actionLow} ${speechLow} ${sceneContext.toLowerCase()}`,
-        /(attack|charge|butt|chase|angry|গুতো|গুঁতো|তাড়া|তেড়ে|আক্রমণ|ধাক্কা|রাগ)/
-      )
+      attackCue ||
+      (expLow === 'angry' && !calmGrazing && !mooCue)
     ) {
       return 'cow_attacking';
     }
-    if (
-      spIdLow === 'cow_mooing' ||
-      speechLow.trim().length > 0 ||
-      isActionMatch(
-        `${actionLow} ${speechLow} ${sceneContext.toLowerCase()}`,
-        /(moo|হাম্বা|ডাক|talk|speak|কথা)/
-      )
-    ) {
+    if (mooCue || speechLow.trim().length > 0) {
       return 'cow_mooing';
     }
     return 'cow_grass_eating';

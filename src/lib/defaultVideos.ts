@@ -89,7 +89,7 @@ export const STARTER_VIDEOS: VideoItem[] = [
             keyframes: [
               {
                 t: 0,
-                x: 0.78,
+                x: 0.70,
                 y: 0,
                 facing: -1,
                 rotationDeg: 0,
@@ -105,7 +105,7 @@ export const STARTER_VIDEOS: VideoItem[] = [
               },
               {
                 t: 1,
-                x: 0.74,
+                x: 0.68,
                 y: 0,
                 facing: -1,
                 rotationDeg: 0,
@@ -133,7 +133,7 @@ export const STARTER_VIDEOS: VideoItem[] = [
         captionTop: 'হঠাৎ গরুর ধাওয়া ও গুঁতো!',
         splitScreen: false,
         effects: [
-          { t: 0.22, duration: 0.35, type: 'impact_star', x: 0.44, y: 0.56, text: 'গুতো!', targetCharIndex: 0 },
+          { t: 0.22, duration: 0.35, type: 'impact_star', x: 0.44, y: 0.56, text: 'গুঁতো!', targetCharIndex: 0 },
           { t: 0.22, duration: 0.28, type: 'screen_shake', x: 0.5, y: 0.5 },
           { t: 0.32, duration: 0.4, type: 'dust_puff', x: 0.32, y: 0.72, targetCharIndex: 0 },
         ],
@@ -143,13 +143,13 @@ export const STARTER_VIDEOS: VideoItem[] = [
             id: 'rafu',
             name: 'রাফু',
             kind: 'sprite_actor',
-            spriteAssetId: 'rafu_scared',
+            spriteAssetId: 'rafu_running_away',
             side: 'left',
             expression: 'shocked',
-            action: 'scared',
+            action: 'run',
             prop: 'none',
             voiceEffect: 'panicked',
-            speech: 'ওরে বাবা! গরুটা আমাকে গুতো দিল!',
+            speech: 'ওরে বাবা! গরুটা আমাকে গুঁতো দিল!',
             keyframes: [
               {
                 t: 0,
@@ -169,11 +169,11 @@ export const STARTER_VIDEOS: VideoItem[] = [
                 expression: 'shocked',
               },
               {
-                t: 0.3,
-                x: 0.30,
-                y: 0.14,
+                t: 0.28,
+                x: 0.34,
+                y: 0.1,
                 facing: -1,
-                rotationDeg: -8,
+                rotationDeg: -4,
                 curlBall: 0,
                 torsoLeanDeg: 0,
                 headTiltDeg: 0,
@@ -181,13 +181,13 @@ export const STARTER_VIDEOS: VideoItem[] = [
                 rightArmDeg: { shoulder: 0, elbow: 0 },
                 leftLegDeg: { hip: 0, knee: 0 },
                 rightLegDeg: { hip: 0, knee: 0 },
-                vibrate: 0.8,
+                vibrate: 0.7,
                 heldProp: 'none',
                 expression: 'shocked',
               },
               {
                 t: 1,
-                x: 0.22,
+                x: 0.16,
                 y: 0,
                 facing: -1,
                 rotationDeg: 0,
@@ -198,7 +198,7 @@ export const STARTER_VIDEOS: VideoItem[] = [
                 rightArmDeg: { shoulder: 0, elbow: 0 },
                 leftLegDeg: { hip: 0, knee: 0 },
                 rightLegDeg: { hip: 0, knee: 0 },
-                vibrate: 0.5,
+                vibrate: 0.3,
                 heldProp: 'none',
                 expression: 'crying',
               },
@@ -216,7 +216,7 @@ export const STARTER_VIDEOS: VideoItem[] = [
             keyframes: [
               {
                 t: 0,
-                x: 0.74,
+                x: 0.70,
                 y: 0,
                 facing: -1,
                 rotationDeg: 0,
@@ -231,8 +231,8 @@ export const STARTER_VIDEOS: VideoItem[] = [
                 heldProp: 'none',
               },
               {
-                t: 0.3,
-                x: 0.52,
+                t: 0.35,
+                x: 0.56,
                 y: 0.02,
                 facing: -1,
                 rotationDeg: 0,
@@ -248,7 +248,7 @@ export const STARTER_VIDEOS: VideoItem[] = [
               },
               {
                 t: 1,
-                x: 0.62,
+                x: 0.42,
                 y: 0,
                 facing: -1,
                 rotationDeg: 0,

@@ -1,4 +1,5 @@
 import type { VideoScript } from '../types/comic';
+import { getAudioBackupDataUrl, resolveAssetUrlWithBackup } from './hybridSpriteCatalog';
 
 export type MouthViseme =
   | 'closed'
@@ -32,7 +33,8 @@ function cacheKeyForClip(
 
 async function analyzeAudioDataUrl(
   key: string,
-  audioDataUrl: string
+  audioDataUrl: string,
+  backupUrl?: string
 ): Promise<AnalyzedClip | null> {
   if (analyzedCache.has(key)) {
     return analyzedCache.get(key)!;
@@ -43,8 +45,20 @@ async function analyzeAudioDataUrl(
 
   const job = (async (): Promise<AnalyzedClip | null> => {
     try {
-      const res = await fetch(audioDataUrl);
-      const arr = await res.arrayBuffer();
+      let arr: ArrayBuffer;
+      try {
+        const res = await fetch(audioDataUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        arr = await res.arrayBuffer();
+      } catch (err) {
+        if (backupUrl && backupUrl !== audioDataUrl) {
+          const res2 = await fetch(backupUrl);
+          if (!res2.ok) throw err;
+          arr = await res2.arrayBuffer();
+        } else {
+          throw err;
+        }
+      }
       const AudioCtx =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -161,9 +175,13 @@ export async function prepareLipSyncForScript(script: VideoScript): Promise<void
 
   script.scenes.forEach((sc, sIdx) => {
     sc.characters.forEach((ch, cIdx) => {
-      if (ch.customAudioDataUrl) {
-        const key = cacheKeyForClip(ch.customAudioDataUrl, sIdx, cIdx);
-        tasks.push(analyzeAudioDataUrl(key, ch.customAudioDataUrl));
+      const customSrc =
+        ch.customAudioDataUrl ||
+        resolveAssetUrlWithBackup(ch.customAudioUrl, ch.customAudioAssetId);
+      if (customSrc) {
+        const backup = getAudioBackupDataUrl(ch.customAudioUrl, ch.customAudioAssetId);
+        const key = cacheKeyForClip(customSrc, sIdx, cIdx);
+        tasks.push(analyzeAudioDataUrl(key, customSrc, backup));
       }
     });
   });
@@ -181,9 +199,12 @@ export function sampleCharacterLipSync(
   const scene = script.scenes[sceneIndex];
   const char = scene?.characters?.[charIndex];
 
-  // 1. Custom uploaded/mic audio takes priority
-  if (char?.customAudioDataUrl) {
-    const key = cacheKeyForClip(char.customAudioDataUrl, sceneIndex, charIndex);
+  // 1. Custom uploaded/mic/library audio takes priority
+  const customSrc =
+    char?.customAudioDataUrl ||
+    resolveAssetUrlWithBackup(char?.customAudioUrl, char?.customAudioAssetId);
+  if (customSrc) {
+    const key = cacheKeyForClip(customSrc, sceneIndex, charIndex);
     const analyzed = analyzedCache.get(key);
     const offset = charIndex === 0 ? 0.2 : Math.min((scene?.durationSec || 4) * 0.45, 2.0);
     const tInClip = localT - offset;

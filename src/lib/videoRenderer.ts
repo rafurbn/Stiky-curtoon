@@ -868,7 +868,7 @@ function drawStickMemeCharacter(
  * 2. 2D COLORED CARTOON RENDERER (Procedural Vibrant Backdrops + Colored Characters)
  * ========================================================================== */
 
-function drawHybridBackgroundImage(
+function drawImageFittedToFrame(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
   w: number,
@@ -887,7 +887,6 @@ function drawHybridBackgroundImage(
 
   const srcHorizon = Math.round(ih * 0.72);
   if (iw / ih < w / h) {
-    // Tall portrait background (e.g. 9:16) rendered into wider frame (e.g. 1:1): preserve horizontal scale & crop cleanly from horizon
     const scaleX = w / iw;
     const neededSrcAbove = groundY / scaleX;
     const neededSrcBelow = (h - groundY) / scaleX;
@@ -900,7 +899,6 @@ function drawHybridBackgroundImage(
       return;
     }
   } else {
-    // Wide image rendered into taller frame: cover-crop horizontally centered while anchoring horizon at groundY
     const srcW = Math.min(iw, Math.round(ih * (w / h)));
     const srcX = Math.max(0, Math.round((iw - srcW) / 2));
     ctx.drawImage(img, srcX, 0, srcW, srcHorizon, 0, 0, w, groundY);
@@ -912,12 +910,81 @@ function drawHybridBackgroundImage(
   ctx.drawImage(img, 0, srcHorizon, iw, ih - srcHorizon, 0, groundY, w, h - groundY);
 }
 
+function drawHybridBackgroundImage(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  w: number,
+  h: number,
+  groundY: number,
+  parallaxOffsetPx = 0
+) {
+  const iw = img.naturalWidth;
+  const ih = img.naturalHeight;
+  if (iw <= 0 || ih <= 0) return;
+
+  if (Math.abs(parallaxOffsetPx) < 0.5) {
+    drawImageFittedToFrame(ctx, img, w, h, groundY);
+    return;
+  }
+
+  // Seamless alternating mirror-tiled horizontal scroll so any scene/sky/field pans smoothly with zero seams
+  const period = w * 2;
+  let shift = parallaxOffsetPx % period;
+  if (shift < 0) shift += period;
+
+  for (let tileIdx = -2; tileIdx <= 2; tileIdx++) {
+    const tileX = tileIdx * w + shift;
+    if (tileX + w < -2 || tileX > w + 2) continue;
+    const isMirrored = Math.abs(tileIdx) % 2 === 1;
+    ctx.save();
+    if (isMirrored) {
+      ctx.translate(tileX + w, 0);
+      ctx.scale(-1, 1);
+      drawImageFittedToFrame(ctx, img, w, h, groundY);
+    } else {
+      ctx.translate(tileX, 0);
+      drawImageFittedToFrame(ctx, img, w, h, groundY);
+    }
+    ctx.restore();
+  }
+}
+
+function computeSceneParallaxOffsetPx(
+  scene: VideoScene,
+  localT: number,
+  w: number
+): number {
+  if (typeof scene.parallax === 'number' && Math.abs(scene.parallax) > 0.02) {
+    // Background scrolls opposite to apparent travel direction
+    return -scene.parallax * localT * (w * 0.14);
+  }
+  // Auto-detect strong horizontal running/chasing motion across scene
+  let totalTravel = 0;
+  let maxTravel = 0;
+  for (const ch of scene.characters) {
+    const kfs = Array.isArray(ch.keyframes) ? ch.keyframes : [];
+    if (kfs.length >= 2) {
+      const dx = kfs[kfs.length - 1].x - kfs[0].x;
+      if (Math.abs(dx) > Math.abs(maxTravel)) {
+        maxTravel = dx;
+      }
+      totalTravel += dx;
+    }
+  }
+  if (Math.abs(maxTravel) >= 0.25) {
+    const dir = Math.sign(totalTravel || maxTravel);
+    return -dir * localT * (w * 0.11);
+  }
+  return 0;
+}
+
 function drawColoredCartoonBackground(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
   scene: VideoScene,
   globalT: number,
+  localT: number,
   groundY: number
 ) {
   const bgImg =
@@ -926,7 +993,8 @@ function drawColoredCartoonBackground(
     getLoadedImageSync(findAssetByIdOrTheme(scene.theme)?.url);
 
   if (bgImg) {
-    drawHybridBackgroundImage(ctx, bgImg, w, h, groundY);
+    const parallaxPx = computeSceneParallaxOffsetPx(scene, localT, w);
+    drawHybridBackgroundImage(ctx, bgImg, w, h, groundY, parallaxPx);
     return;
   }
 
@@ -1134,7 +1202,7 @@ export function renderVideoFrame(
       groundY
     );
   } else {
-    drawColoredCartoonBackground(ctx, w, h, scene, elapsedSec, groundY);
+    drawColoredCartoonBackground(ctx, w, h, scene, elapsedSec, localT, groundY);
   }
 
   // Active speaker tracking
@@ -1329,22 +1397,22 @@ export function renderVideoFrame(
     ctx.restore();
   }
 
-  // Subtle scene top label below hook (with crisp high-contrast pill for bright skies)
+  // Scene top label below hook (crisp legible pill for mobile 9:16 viewing)
   if (scene.captionTop) {
     ctx.save();
-    ctx.font = '600 18px "Hind Siliguri", sans-serif';
+    ctx.font = '700 21px "Hind Siliguri", "Plus Jakarta Sans", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     if (!isStick) {
-      const capW = Math.min(w - 64, ctx.measureText(scene.captionTop).width + 32);
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.68)';
-      drawRoundedRect(ctx, (w - capW) / 2, 108, capW, 32, 999);
+      const capW = Math.min(w - 56, ctx.measureText(scene.captionTop).width + 38);
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+      drawRoundedRect(ctx, (w - capW) / 2, 108, capW, 38, 999);
       ctx.fill();
       ctx.fillStyle = '#FFFFFF';
-      ctx.fillText(scene.captionTop, w / 2, 124);
+      ctx.fillText(scene.captionTop, w / 2, 128);
     } else {
-      ctx.fillStyle = 'rgba(17, 24, 39, 0.65)';
-      ctx.fillText(scene.captionTop, w / 2, 124);
+      ctx.fillStyle = 'rgba(17, 24, 39, 0.72)';
+      ctx.fillText(scene.captionTop, w / 2, 128);
     }
     ctx.restore();
   }

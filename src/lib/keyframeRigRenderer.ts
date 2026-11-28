@@ -924,16 +924,23 @@ export function drawSceneVisualEffects(
     let cx = fx.x * w;
     let cy = fx.y * h;
 
-    // Anchor FX directly onto target character (prevents effects floating in empty sky)
+    // Anchor FX directly onto target character (ground level for dust_puff, overhead for sparks/laugh)
+    const yAnchorOffset =
+      fx.type === 'dust_puff'
+        ? -14
+        : fx.type === 'laugh_burst' || fx.type === 'tickle_sparks'
+          ? -185
+          : -115;
+
     if (
       typeof fx.targetCharIndex === 'number' &&
       resolvedCharacters[fx.targetCharIndex]
     ) {
       const target = resolvedCharacters[fx.targetCharIndex];
       cx = target.xNorm * w;
-      cy = target.yPx - 120;
-    } else if (resolvedCharacters.length > 0 && fx.y < 0.34) {
-      // Auto-snap stray sky-high impact stars/sparks onto nearest character torso
+      cy = target.yPx + yAnchorOffset;
+    } else if (resolvedCharacters.length > 0 && (fx.y < 0.34 || (fx.type === 'dust_puff' && fx.y < 0.66))) {
+      // Auto-snap stray sky-high impact stars/sparks or unanchored dust_puff onto nearest character
       let best = resolvedCharacters[0];
       let bestDist = Math.abs(best.xNorm - fx.x);
       for (const rc of resolvedCharacters) {
@@ -944,7 +951,9 @@ export function drawSceneVisualEffects(
         }
       }
       cx = best.xNorm * w;
-      cy = best.yPx - 120;
+      cy = best.yPx + yAnchorOffset;
+    } else if (fx.type === 'dust_puff') {
+      cy = Math.max(h * 0.7, cy);
     }
 
     ctx.save();
